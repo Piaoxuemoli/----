@@ -10,6 +10,56 @@ int scope, next_tmp, next_label;
 SYM *sym_tab_global, *sym_tab_local;
 TAC *tac_first, *tac_last;
 
+typedef struct loop_ctx
+{
+	SYM *continue_label;
+	SYM *break_label;
+	struct loop_ctx *prev;
+} LOOP_CTX;
+
+static LOOP_CTX *loop_stack = NULL;
+
+void loop_push(SYM *continue_label, SYM *break_label)
+{
+	LOOP_CTX *ctx=(LOOP_CTX *)malloc(sizeof(LOOP_CTX));
+	ctx->continue_label=continue_label;
+	ctx->break_label=break_label;
+	ctx->prev=loop_stack;
+	loop_stack=ctx;
+}
+
+void loop_pop(void)
+{
+	if(loop_stack==NULL)
+	{
+		error("loop stack underflow");
+		return;
+	}
+	LOOP_CTX *ctx=loop_stack;
+	loop_stack=ctx->prev;
+	free(ctx);
+}
+
+SYM *loop_current_continue(void)
+{
+	if(loop_stack==NULL)
+	{
+		error("continue statement not within loop");
+		return NULL;
+	}
+	return loop_stack->continue_label;
+}
+
+SYM *loop_current_break(void)
+{
+	if(loop_stack==NULL)
+	{
+		error("break statement not within loop");
+		return NULL;
+	}
+	return loop_stack->break_label;
+}
+
 void tac_init()
 {
 	scope=0;
@@ -237,6 +287,20 @@ TAC *do_output(SYM *s)
 	return code;
 }
 
+TAC *do_break_stmt(void)
+{
+	SYM *label=loop_current_break();
+	if(label==NULL) return NULL;
+	return mk_tac(TAC_GOTO, label, NULL, NULL);
+}
+
+TAC *do_continue_stmt(void)
+{
+	SYM *label=loop_current_continue();
+	if(label==NULL) return NULL;
+	return mk_tac(TAC_GOTO, label, NULL, NULL);
+}
+
 EXP *do_bin( int binop, EXP *exp1, EXP *exp2)
 {
 	TAC *temp; /* TAC code for temp symbol */
@@ -406,14 +470,77 @@ TAC *do_test(EXP *exp, TAC *stmt1, TAC *stmt2)
 	return label2;
 }
 
-TAC *do_while(EXP *exp, TAC *stmt) 
+TAC *do_while(EXP *exp, TAC *stmt, LOOP_INFO *info)
 {
-	TAC *label=mk_tac(TAC_LABEL, mk_label(mk_lstr(next_label++)), NULL, NULL);
-	TAC *code=mk_tac(TAC_GOTO, label->a, NULL, NULL);
+	SYM *start_label = info->start_label;
+	SYM *break_label = info->break_label;
 
-	code->prev=stmt; /* Bolt on the goto */
+	TAC *goto_start = mk_tac(TAC_GOTO, start_label, NULL, NULL);
+	if(stmt != NULL)
+	{
+		goto_start = join_tac(stmt, goto_start);
+	}
 
-	return join_tac(label, do_if(exp, code));
+	TAC *chain = goto_start;
+
+	if(exp != NULL)
+	{
+		TAC *ifz = mk_tac(TAC_IFZ, break_label, exp->ret, NULL);
+		ifz->prev = exp->tac;
+		chain = join_tac(ifz, chain);
+	}
+
+	TAC *start_tac = mk_tac(TAC_LABEL, start_label, NULL, NULL);
+	chain = join_tac(start_tac, chain);
+
+	TAC *exit_label = mk_tac(TAC_LABEL, break_label, NULL, NULL);
+	exit_label->prev = chain;
+
+	return exit_label;
+}
+
+TAC *do_for(TAC *init, EXP *cond, TAC *post, TAC *stmt, LOOP_INFO *info)
+{
+	SYM *start_label = info->start_label;
+	SYM *continue_label = info->continue_label;
+	SYM *break_label = info->break_label;
+
+	TAC *goto_start = mk_tac(TAC_GOTO, start_label, NULL, NULL);
+
+	if(post != NULL)
+	{
+		goto_start = join_tac(post, goto_start);
+	}
+
+	TAC *continue_tac = mk_tac(TAC_LABEL, continue_label, NULL, NULL);
+	goto_start = join_tac(continue_tac, goto_start);
+
+	TAC *chain = goto_start;
+
+	if(stmt != NULL)
+	{
+		chain = join_tac(stmt, chain);
+	}
+
+	if(cond != NULL)
+	{
+		TAC *ifz = mk_tac(TAC_IFZ, break_label, cond->ret, NULL);
+		ifz->prev = cond->tac;
+		chain = join_tac(ifz, chain);
+	}
+
+	TAC *start_tac = mk_tac(TAC_LABEL, start_label, NULL, NULL);
+	chain = join_tac(start_tac, chain);
+
+	if(init != NULL)
+	{
+		chain = join_tac(init, chain);
+	}
+
+	TAC *exit_label = mk_tac(TAC_LABEL, break_label, NULL, NULL);
+	exit_label->prev = chain;
+
+	return exit_label;
 }
 
 SYM *get_var(char *name)

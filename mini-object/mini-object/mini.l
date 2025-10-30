@@ -41,6 +41,12 @@ static int parse_char_literal(const char *text)
 
 "while"  {  return WHILE;  }
 
+"for"  {  return FOR; }
+
+"break" { return BREAK; }
+
+"continue" { return CONTINUE; }
+
 [A-Za-z]([A-Za-z]|[0-9])*  {  
 	yylval.string = strdup(yytext); 
 	return IDENTIFIER;

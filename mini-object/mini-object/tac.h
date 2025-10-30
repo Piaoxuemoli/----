@@ -59,6 +59,13 @@ typedef struct sym
 	void *etc;
 } SYM;
 
+typedef struct loop_info
+{
+	SYM *start_label;
+	SYM *continue_label;
+	SYM *break_label;
+} LOOP_INFO;
+
 typedef struct tac
 {
 	struct tac  *next;
@@ -110,9 +117,16 @@ TAC *do_input(SYM *var);
 TAC *do_call(char *name, EXP *arglist);
 TAC *do_if(EXP *exp, TAC *stmt);
 TAC *do_test(EXP *exp, TAC *stmt1, TAC *stmt2);
-TAC *do_while(EXP *exp, TAC *stmt);
+TAC *do_while(EXP *exp, TAC *stmt, LOOP_INFO *info);
+TAC *do_for(TAC *init, EXP *cond, TAC *post, TAC *stmt, LOOP_INFO *info);
 EXP *do_bin( int binop, EXP *exp1, EXP *exp2);
 EXP *do_cmp( int binop, EXP *exp1, EXP *exp2);
 EXP *do_un( int unop, EXP *exp);
 EXP *do_call_ret(char *name, EXP *arglist);
+TAC *do_break_stmt(void);
+TAC *do_continue_stmt(void);
 void error(const char *format, ...);
+void loop_push(SYM *continue_label, SYM *break_label);
+void loop_pop(void);
+SYM *loop_current_continue(void);
+SYM *loop_current_break(void);

@@ -66,14 +66,17 @@ extern int yydebug;
     IF = 267,                      /* IF  */
     ELSE = 268,                    /* ELSE  */
     WHILE = 269,                   /* WHILE  */
-    FUNC = 270,                    /* FUNC  */
-    INPUT = 271,                   /* INPUT  */
-    OUTPUT = 272,                  /* OUTPUT  */
-    RETURN = 273,                  /* RETURN  */
-    INTEGER = 274,                 /* INTEGER  */
-    IDENTIFIER = 275,              /* IDENTIFIER  */
-    TEXT = 276,                    /* TEXT  */
-    CHARACTER = 277                /* CHARACTER  */
+    FOR = 270,                     /* FOR  */
+    BREAK = 271,                   /* BREAK  */
+    CONTINUE = 272,                /* CONTINUE  */
+    FUNC = 273,                    /* FUNC  */
+    INPUT = 274,                   /* INPUT  */
+    OUTPUT = 275,                  /* OUTPUT  */
+    RETURN = 276,                  /* RETURN  */
+    INTEGER = 277,                 /* INTEGER  */
+    IDENTIFIER = 278,              /* IDENTIFIER  */
+    TEXT = 279,                    /* TEXT  */
+    CHARACTER = 280                /* CHARACTER  */
   };
   typedef enum yytokentype yytoken_kind_t;
 #endif
@@ -94,14 +97,17 @@ extern int yydebug;
 #define IF 267
 #define ELSE 268
 #define WHILE 269
-#define FUNC 270
-#define INPUT 271
-#define OUTPUT 272
-#define RETURN 273
-#define INTEGER 274
-#define IDENTIFIER 275
-#define TEXT 276
-#define CHARACTER 277
+#define FOR 270
+#define BREAK 271
+#define CONTINUE 272
+#define FUNC 273
+#define INPUT 274
+#define OUTPUT 275
+#define RETURN 276
+#define INTEGER 277
+#define IDENTIFIER 278
+#define TEXT 279
+#define CHARACTER 280
 
 /* Value type.  */
 #if ! defined YYSTYPE && ! defined YYSTYPE_IS_DECLARED
@@ -112,11 +118,12 @@ union YYSTYPE
 	char character;
 	char *string;
 	int number;
+	LOOP_INFO *loop;
 	SYM *sym;
 	TAC *tac;
 	EXP	*exp;
 
-#line 120 "mini.y.h"
+#line 127 "mini.y.h"
 
 };
 typedef union YYSTYPE YYSTYPE;

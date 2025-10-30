@@ -16,12 +16,13 @@ int current_decl_type = TYPE_INT;
 	char character;
 	char *string;
 	int number;
+	LOOP_INFO *loop;
 	SYM *sym;
 	TAC *tac;
 	EXP	*exp;
 }
 
-%token INT CHAR EQ NE LT LE GT GE UMINUS IF ELSE WHILE FUNC INPUT OUTPUT RETURN
+%token INT CHAR EQ NE LT LE GT GE UMINUS IF ELSE WHILE FOR BREAK CONTINUE FUNC INPUT OUTPUT RETURN
 %token <string> INTEGER IDENTIFIER TEXT
 %token <character> CHARACTER
 
@@ -30,8 +31,8 @@ int current_decl_type = TYPE_INT;
 %left '*' '/'
 %right UMINUS
 
-%type <tac> program function_declaration_list function_declaration function parameter_list variable_list statement assignment_statement return_statement if_statement while_statement call_statement block declaration_list declaration statement_list input_statement output_statement
-%type <exp> argument_list expression_list expression call_expression
+%type <tac> program function_declaration_list function_declaration function parameter_list variable_list statement assignment_statement return_statement if_statement while_statement for_statement break_statement continue_statement call_statement block declaration_list declaration statement_list input_statement output_statement for_init for_post
+%type <exp> argument_list expression_list expression call_expression expression_opt
 %type <sym> function_head
 %type <number> type_specifier
 
@@ -125,6 +126,9 @@ statement : assignment_statement ';'
 | return_statement ';'
 | if_statement
 | while_statement
+| for_statement
+| break_statement ';'
+| continue_statement ';'
 | block
 | error
 {
@@ -286,10 +290,82 @@ if_statement : IF '(' expression ')' block
 }
 ;
 
-while_statement : WHILE '(' expression ')' block
+while_statement : WHILE '(' expression ')'
 {
-	$$=do_while($3, $5);
+	LOOP_INFO *info=(LOOP_INFO *)malloc(sizeof(LOOP_INFO));
+	info->start_label=mk_label(mk_lstr(next_label++));
+	info->continue_label=info->start_label;
+	info->break_label=mk_label(mk_lstr(next_label++));
+	loop_push(info->continue_label, info->break_label);
+	$<loop>$=info;
+}
+statement
+{
+	LOOP_INFO *info=$<loop>5;
+	loop_pop();
+	$$=do_while($3, $6, info);
+	free(info);
 }               
+;
+
+for_statement : FOR '(' for_init ';' expression_opt ';' for_post ')'
+{
+	LOOP_INFO *info=(LOOP_INFO *)malloc(sizeof(LOOP_INFO));
+	info->start_label=mk_label(mk_lstr(next_label++));
+	info->continue_label=mk_label(mk_lstr(next_label++));
+	info->break_label=mk_label(mk_lstr(next_label++));
+	loop_push(info->continue_label, info->break_label);
+	$<loop>$=info;
+}
+statement
+{
+	LOOP_INFO *info=$<loop>9;
+	loop_pop();
+	$$=do_for($3, $5, $7, $10, info);
+	free(info);
+}
+;
+
+for_init : assignment_statement
+{
+	$$=$1;
+}
+|
+{
+	$$=NULL;
+}
+;
+
+for_post : assignment_statement
+{
+	$$=$1;
+}
+|
+{
+	$$=NULL;
+}
+;
+
+expression_opt : expression
+{
+	$$=$1;
+}
+|
+{
+	$$=mk_exp(NULL, mk_const(1), NULL);
+}
+;
+
+break_statement : BREAK
+{
+	$$=do_break_stmt();
+}
+;
+
+continue_statement : CONTINUE
+{
+	$$=do_continue_stmt();
+}
 ;
 
 call_statement : IDENTIFIER '(' argument_list ')'
