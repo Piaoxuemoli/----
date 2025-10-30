@@ -43,6 +43,12 @@ static int parse_char_literal(const char *text)
 
 "for"  {  return FOR; }
 
+"switch" { return SWITCH; }
+
+"case" { return CASE; }
+
+"default" { return DEFAULT; }
+
 "break" { return BREAK; }
 
 "continue" { return CONTINUE; }

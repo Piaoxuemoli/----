@@ -67,16 +67,19 @@ extern int yydebug;
     ELSE = 268,                    /* ELSE  */
     WHILE = 269,                   /* WHILE  */
     FOR = 270,                     /* FOR  */
-    BREAK = 271,                   /* BREAK  */
-    CONTINUE = 272,                /* CONTINUE  */
-    FUNC = 273,                    /* FUNC  */
-    INPUT = 274,                   /* INPUT  */
-    OUTPUT = 275,                  /* OUTPUT  */
-    RETURN = 276,                  /* RETURN  */
-    INTEGER = 277,                 /* INTEGER  */
-    IDENTIFIER = 278,              /* IDENTIFIER  */
-    TEXT = 279,                    /* TEXT  */
-    CHARACTER = 280                /* CHARACTER  */
+    SWITCH = 271,                  /* SWITCH  */
+    CASE = 272,                    /* CASE  */
+    DEFAULT = 273,                 /* DEFAULT  */
+    BREAK = 274,                   /* BREAK  */
+    CONTINUE = 275,                /* CONTINUE  */
+    FUNC = 276,                    /* FUNC  */
+    INPUT = 277,                   /* INPUT  */
+    OUTPUT = 278,                  /* OUTPUT  */
+    RETURN = 279,                  /* RETURN  */
+    INTEGER = 280,                 /* INTEGER  */
+    IDENTIFIER = 281,              /* IDENTIFIER  */
+    TEXT = 282,                    /* TEXT  */
+    CHARACTER = 283                /* CHARACTER  */
   };
   typedef enum yytokentype yytoken_kind_t;
 #endif
@@ -98,16 +101,19 @@ extern int yydebug;
 #define ELSE 268
 #define WHILE 269
 #define FOR 270
-#define BREAK 271
-#define CONTINUE 272
-#define FUNC 273
-#define INPUT 274
-#define OUTPUT 275
-#define RETURN 276
-#define INTEGER 277
-#define IDENTIFIER 278
-#define TEXT 279
-#define CHARACTER 280
+#define SWITCH 271
+#define CASE 272
+#define DEFAULT 273
+#define BREAK 274
+#define CONTINUE 275
+#define FUNC 276
+#define INPUT 277
+#define OUTPUT 278
+#define RETURN 279
+#define INTEGER 280
+#define IDENTIFIER 281
+#define TEXT 282
+#define CHARACTER 283
 
 /* Value type.  */
 #if ! defined YYSTYPE && ! defined YYSTYPE_IS_DECLARED
@@ -119,11 +125,14 @@ union YYSTYPE
 	char *string;
 	int number;
 	LOOP_INFO *loop;
+	SWITCH_CASE *cases;
+	SWITCH_BODY *switch_body;
+	DEFAULT_BLOCK *def_block;
 	SYM *sym;
 	TAC *tac;
 	EXP	*exp;
 
-#line 127 "mini.y.h"
+#line 136 "mini.y.h"
 
 };
 typedef union YYSTYPE YYSTYPE;

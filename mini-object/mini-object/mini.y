@@ -17,12 +17,15 @@ int current_decl_type = TYPE_INT;
 	char *string;
 	int number;
 	LOOP_INFO *loop;
+	SWITCH_CASE *cases;
+	SWITCH_BODY *switch_body;
+	DEFAULT_BLOCK *def_block;
 	SYM *sym;
 	TAC *tac;
 	EXP	*exp;
 }
 
-%token INT CHAR EQ NE LT LE GT GE UMINUS IF ELSE WHILE FOR BREAK CONTINUE FUNC INPUT OUTPUT RETURN
+%token INT CHAR EQ NE LT LE GT GE UMINUS IF ELSE WHILE FOR SWITCH CASE DEFAULT BREAK CONTINUE FUNC INPUT OUTPUT RETURN
 %token <string> INTEGER IDENTIFIER TEXT
 %token <character> CHARACTER
 
@@ -31,9 +34,13 @@ int current_decl_type = TYPE_INT;
 %left '*' '/'
 %right UMINUS
 
-%type <tac> program function_declaration_list function_declaration function parameter_list variable_list statement assignment_statement return_statement if_statement while_statement for_statement break_statement continue_statement call_statement block declaration_list declaration statement_list input_statement output_statement for_init for_post
+%type <tac> program function_declaration_list function_declaration function parameter_list variable_list statement assignment_statement return_statement if_statement while_statement for_statement switch_statement break_statement continue_statement call_statement block declaration_list declaration statement_list input_statement output_statement for_init for_post case_statement_list
 %type <exp> argument_list expression_list expression call_expression expression_opt
-%type <sym> function_head
+%type <sym> function_head case_value
+%type <loop> switch_header
+%type <cases> case_clause
+%type <switch_body> switch_sections
+%type <def_block> default_clause
 %type <number> type_specifier
 
 %%
@@ -127,6 +134,7 @@ statement : assignment_statement ';'
 | if_statement
 | while_statement
 | for_statement
+| switch_statement
 | break_statement ';'
 | continue_statement ';'
 | block
@@ -365,6 +373,110 @@ break_statement : BREAK
 continue_statement : CONTINUE
 {
 	$$=do_continue_stmt();
+}
+;
+
+switch_header :
+{
+	LOOP_INFO *info=(LOOP_INFO *)malloc(sizeof(LOOP_INFO));
+	info->start_label=NULL;
+	info->continue_label=NULL;
+	info->break_label=mk_label(mk_lstr(next_label++));
+	loop_push(NULL, info->break_label);
+	$$=info;
+}
+;
+
+switch_statement : SWITCH '(' expression ')' switch_header '{' switch_sections '}'
+{
+	SWITCH_BODY *body=$7;
+	LOOP_INFO *info=$5;
+	loop_pop();
+	$$=do_switch($3, body->cases, body->default_label, body->default_code, info);
+	free(body);
+	free(info);
+}
+;
+
+switch_sections :
+{
+	SWITCH_BODY *body=(SWITCH_BODY *)malloc(sizeof(SWITCH_BODY));
+	body->cases=NULL;
+	body->default_label=NULL;
+	body->default_code=NULL;
+	$$=body;
+}
+| switch_sections case_clause
+{
+	SWITCH_BODY *body=$1;
+	if(body->cases==NULL)
+	{
+		body->cases=$2;
+	}
+	else
+	{
+		SWITCH_CASE *iter=body->cases;
+		while(iter->next!=NULL) iter=iter->next;
+		iter->next=$2;
+	}
+	$$=body;
+}
+| switch_sections default_clause
+{
+	SWITCH_BODY *body=$1;
+	if(body->default_code!=NULL)
+	{
+		error("duplicate default label in switch");
+	}
+	else
+	{
+		body->default_label=$2->label;
+		body->default_code=$2->code;
+	}
+	free($2);
+	$$=body;
+}
+;
+
+case_clause : CASE case_value ':' case_statement_list
+{
+	SWITCH_CASE *node=(SWITCH_CASE *)malloc(sizeof(SWITCH_CASE));
+	node->value=$2;
+	node->label=mk_label(mk_lstr(next_label++));
+	TAC *label_tac=mk_tac(TAC_LABEL, node->label, NULL, NULL);
+	node->code=join_tac(label_tac, $4);
+	node->next=NULL;
+	$$=node;
+}
+;
+
+case_value : INTEGER
+{
+	$$=mk_const(atoi($1));
+}
+| CHARACTER
+{
+	$$=mk_char_const($1);
+}
+;
+
+default_clause : DEFAULT ':' case_statement_list
+{
+	DEFAULT_BLOCK *block=(DEFAULT_BLOCK *)malloc(sizeof(DEFAULT_BLOCK));
+	block->label=mk_label(mk_lstr(next_label++));
+	TAC *label_tac=mk_tac(TAC_LABEL, block->label, NULL, NULL);
+	block->code=join_tac(label_tac, $3);
+	$$=block;
+}
+;
+
+case_statement_list : case_statement_list statement
+{
+	$$=join_tac($1, $2);
+}
+|
+{
+	$$=NULL;
 }
 ;
 

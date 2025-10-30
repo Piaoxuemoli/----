@@ -42,12 +42,17 @@ void loop_pop(void)
 
 SYM *loop_current_continue(void)
 {
-	if(loop_stack==NULL)
+	LOOP_CTX *ctx=loop_stack;
+	while(ctx!=NULL && ctx->continue_label==NULL)
+	{
+		ctx=ctx->prev;
+	}
+	if(ctx==NULL)
 	{
 		error("continue statement not within loop");
 		return NULL;
 	}
-	return loop_stack->continue_label;
+	return ctx->continue_label;
 }
 
 SYM *loop_current_break(void)
@@ -541,6 +546,54 @@ TAC *do_for(TAC *init, EXP *cond, TAC *post, TAC *stmt, LOOP_INFO *info)
 	exit_label->prev = chain;
 
 	return exit_label;
+}
+
+TAC *do_switch(EXP *expr, SWITCH_CASE *cases, SYM *default_label, TAC *default_code, LOOP_INFO *info)
+{
+	TAC *sequence = expr ? expr->tac : NULL;
+	SYM *expr_temp = mk_tmp();
+	TAC *temp_decl = mk_tac(TAC_VAR, expr_temp, NULL, NULL);
+	sequence = join_tac(sequence, temp_decl);
+	TAC *copy = mk_tac(TAC_COPY, expr_temp, expr->ret, NULL);
+	sequence = join_tac(sequence, copy);
+
+	for(SWITCH_CASE *iter=cases; iter!=NULL; iter=iter->next)
+	{
+		SYM *diff = mk_tmp();
+		TAC *diff_decl = mk_tac(TAC_VAR, diff, NULL, NULL);
+		sequence = join_tac(sequence, diff_decl);
+		TAC *sub = mk_tac(TAC_SUB, diff, expr_temp, iter->value);
+		sequence = join_tac(sequence, sub);
+		TAC *ifz = mk_tac(TAC_IFZ, iter->label, diff, NULL);
+		sequence = join_tac(sequence, ifz);
+	}
+
+	SYM *fall_label = default_label ? default_label : info->break_label;
+	TAC *jump = mk_tac(TAC_GOTO, fall_label, NULL, NULL);
+	sequence = join_tac(sequence, jump);
+
+	for(SWITCH_CASE *iter=cases; iter!=NULL; iter=iter->next)
+	{
+		if(iter->code != NULL)
+		{
+			sequence = join_tac(sequence, iter->code);
+		}
+		else
+		{
+			TAC *label_tac = mk_tac(TAC_LABEL, iter->label, NULL, NULL);
+			sequence = join_tac(sequence, label_tac);
+		}
+	}
+
+	if(default_code != NULL)
+	{
+		sequence = join_tac(sequence, default_code);
+	}
+
+	TAC *exit_label = mk_tac(TAC_LABEL, info->break_label, NULL, NULL);
+	sequence = join_tac(sequence, exit_label);
+
+	return sequence;
 }
 
 SYM *get_var(char *name)

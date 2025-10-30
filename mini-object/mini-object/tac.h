@@ -66,6 +66,14 @@ typedef struct loop_info
 	SYM *break_label;
 } LOOP_INFO;
 
+typedef struct switch_case
+{
+	SYM *value;
+	SYM *label;
+	struct tac *code;
+	struct switch_case *next;
+} SWITCH_CASE;
+
 typedef struct tac
 {
 	struct tac  *next;
@@ -76,6 +84,19 @@ typedef struct tac
 	SYM *c;
 	void *etc;
 } TAC;
+
+typedef struct switch_body
+{
+	SWITCH_CASE *cases;
+	SYM *default_label;
+	TAC *default_code;
+} SWITCH_BODY;
+
+typedef struct default_block
+{
+	SYM *label;
+	TAC *code;
+} DEFAULT_BLOCK;
 
 typedef struct exp
 {
@@ -119,6 +140,7 @@ TAC *do_if(EXP *exp, TAC *stmt);
 TAC *do_test(EXP *exp, TAC *stmt1, TAC *stmt2);
 TAC *do_while(EXP *exp, TAC *stmt, LOOP_INFO *info);
 TAC *do_for(TAC *init, EXP *cond, TAC *post, TAC *stmt, LOOP_INFO *info);
+TAC *do_switch(EXP *expr, SWITCH_CASE *cases, SYM *default_label, TAC *default_code, LOOP_INFO *info);
 EXP *do_bin( int binop, EXP *exp1, EXP *exp2);
 EXP *do_cmp( int binop, EXP *exp1, EXP *exp2);
 EXP *do_un( int unop, EXP *exp);
