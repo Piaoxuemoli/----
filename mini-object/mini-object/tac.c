@@ -65,6 +65,39 @@ SYM *loop_current_break(void)
 	return loop_stack->break_label;
 }
 
+int is_pointer_type(int data_type)
+{
+	return data_type==TYPE_PTR_INT || data_type==TYPE_PTR_CHAR;
+}
+
+int pointer_type_from_base(int base_type)
+{
+	switch(base_type)
+	{
+		case TYPE_INT:
+		return TYPE_PTR_INT;
+		case TYPE_CHAR:
+		return TYPE_PTR_CHAR;
+		default:
+		error("unsupported base type for pointer");
+		return TYPE_PTR_INT;
+	}
+}
+
+int pointer_base_type(int pointer_type)
+{
+	switch(pointer_type)
+	{
+		case TYPE_PTR_INT:
+		return TYPE_INT;
+		case TYPE_PTR_CHAR:
+		return TYPE_CHAR;
+		default:
+		error("dereference of non-pointer type");
+		return TYPE_INT;
+	}
+}
+
 void tac_init()
 {
 	scope=0;
@@ -211,14 +244,19 @@ TAC *do_func(SYM *func, TAC *args, TAC *code)
 	return tend;
 }
 
-SYM *mk_tmp(void)
+SYM *mk_tmp_type(int data_type)
 {
 	SYM *sym;
 	char *name;
 
 	name=malloc(12);
-	sprintf(name, "t%d", next_tmp++); /* Set up text */
-	return mk_var(name, TYPE_INT);
+	sprintf(name, "t%d", next_tmp++);
+	return mk_var(name, data_type);
+}
+
+SYM *mk_tmp(void)
+{
+	return mk_tmp_type(TYPE_INT);
 }
 
 TAC *declare_para(char *name, int data_type)
@@ -290,6 +328,71 @@ TAC *do_output(SYM *s)
 	code=mk_tac(TAC_OUTPUT, s, NULL, NULL);
 
 	return code;
+}
+
+EXP *do_addr(SYM *var)
+{
+	if(var==NULL)
+	{
+		error("address-of null symbol");
+		return mk_exp(NULL, NULL, NULL);
+	}
+	if(var->type!=SYM_VAR)
+	{
+		error("address-of non-variable");
+		return mk_exp(NULL, NULL, NULL);
+	}
+	if(!(var->data_type==TYPE_INT || var->data_type==TYPE_CHAR))
+	{
+		error("address-of unsupported type");
+		return mk_exp(NULL, NULL, NULL);
+	}
+	SYM *tmp=mk_tmp_type(pointer_type_from_base(var->data_type));
+	TAC *decl=mk_tac(TAC_VAR, tmp, NULL, NULL);
+	TAC *addr=mk_tac(TAC_ADDR, tmp, var, NULL);
+	addr->prev=decl;
+	return mk_exp(NULL, tmp, addr);
+}
+
+EXP *do_deref(EXP *ptr)
+{
+	if(ptr==NULL || ptr->ret==NULL)
+	{
+		error("dereference of invalid expression");
+		return mk_exp(NULL, NULL, NULL);
+	}
+	SYM *pointer_sym=ptr->ret;
+	if(!is_pointer_type(pointer_sym->data_type))
+	{
+		error("dereference of non-pointer");
+		return mk_exp(NULL, NULL, NULL);
+	}
+	SYM *tmp=mk_tmp_type(pointer_base_type(pointer_sym->data_type));
+	TAC *decl=mk_tac(TAC_VAR, tmp, NULL, NULL);
+	TAC *code=join_tac(ptr->tac, decl);
+	TAC *load=mk_tac(TAC_LOAD, tmp, pointer_sym, NULL);
+	load->prev=code;
+	ptr->ret=tmp;
+	ptr->tac=load;
+	return ptr;
+}
+
+TAC *do_store(EXP *ptr, EXP *value)
+{
+	if(ptr==NULL || ptr->ret==NULL)
+	{
+		error("store through invalid pointer");
+		return NULL;
+	}
+	if(!is_pointer_type(ptr->ret->data_type))
+	{
+		error("store through non-pointer");
+		return NULL;
+	}
+	TAC *code=join_tac(ptr->tac, value->tac);
+	TAC *store=mk_tac(TAC_STORE, ptr->ret, value->ret, NULL);
+	store->prev=code;
+	return store;
 }
 
 TAC *do_break_stmt(void)
@@ -820,6 +923,18 @@ void out_tac(FILE *f, TAC *i)
 
 		case TAC_LABEL:
 		fprintf(f, "label %s", i->a->name);
+		break;
+
+		case TAC_ADDR:
+		fprintf(f, "%s = &%s", to_str(i->a, sa), to_str(i->b, sb));
+		break;
+
+		case TAC_LOAD:
+		fprintf(f, "%s = *%s", to_str(i->a, sa), to_str(i->b, sb));
+		break;
+
+		case TAC_STORE:
+		fprintf(f, "*%s = %s", to_str(i->a, sa), to_str(i->b, sb));
 		break;
 
 		case TAC_VAR:

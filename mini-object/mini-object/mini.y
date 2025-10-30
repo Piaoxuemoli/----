@@ -32,10 +32,11 @@ int current_decl_type = TYPE_INT;
 %left EQ NE LT LE GT GE
 %left '+' '-'
 %left '*' '/'
-%right UMINUS
+%right UMINUS DEREF ADDROF
 
-%type <tac> program function_declaration_list function_declaration function parameter_list variable_list statement assignment_statement return_statement if_statement while_statement for_statement switch_statement break_statement continue_statement call_statement block declaration_list declaration statement_list input_statement output_statement for_init for_post case_statement_list
+%type <tac> program function_declaration_list function_declaration function parameter_list variable_list declarator statement assignment_statement return_statement if_statement while_statement for_statement switch_statement break_statement continue_statement call_statement block declaration_list declaration statement_list input_statement output_statement for_init for_post case_statement_list
 %type <exp> argument_list expression_list expression call_expression expression_opt
+%type <exp> pointer_lvalue
 %type <sym> function_head case_value
 %type <loop> switch_header
 %type <cases> case_clause
@@ -69,14 +70,21 @@ declaration : type_specifier variable_list ';'
 }
 ;
 
-variable_list : IDENTIFIER
+variable_list : declarator
+| variable_list ',' declarator
+{
+	$$=join_tac($1, $3);
+}
+;
+
+declarator : IDENTIFIER
 {
 	$$=declare_var($1, current_decl_type);
-}               
-| variable_list ',' IDENTIFIER
+}
+| '*' IDENTIFIER
 {
-	$$=join_tac($1, declare_var($3, current_decl_type));
-}               
+	$$=declare_var($2, pointer_type_from_base(current_decl_type));
+}
 ;
 
 function : function_head '(' parameter_list ')' block
@@ -172,6 +180,10 @@ assignment_statement : IDENTIFIER '=' expression
 {
 	$$=do_assign(get_var($1), $3);
 }
+| pointer_lvalue '=' expression
+{
+	$$=do_store($1, $3);
+}
 ;
 
 expression : expression '+' expression
@@ -222,6 +234,14 @@ expression : expression '+' expression
 {
 	$$=$2;
 }               
+| '&' IDENTIFIER %prec ADDROF
+{
+	$$=do_addr(get_var($2));
+}
+| '*' expression %prec DEREF
+{
+	$$=do_deref($2);
+}
 | INTEGER
 {
 	$$=mk_exp(NULL, mk_const(atoi($1)), NULL);
@@ -373,6 +393,12 @@ break_statement : BREAK
 continue_statement : CONTINUE
 {
 	$$=do_continue_stmt();
+}
+;
+
+pointer_lvalue : '*' IDENTIFIER
+{
+	$$=mk_exp(NULL, get_var($2), NULL);
 }
 ;
 

@@ -1,6 +1,8 @@
 /* data type */
 #define TYPE_INT 0
 #define TYPE_CHAR 1
+#define TYPE_PTR_INT 2
+#define TYPE_PTR_CHAR 3
 
 /* type of symbol */
 #define SYM_UNDEF 0
@@ -36,6 +38,9 @@
 #define TAC_RETURN 22 /* return a */
 #define TAC_INPUT 23 /* input a */
 #define TAC_OUTPUT 24 /* output a */
+#define TAC_ADDR 25 /* a=&b */
+#define TAC_LOAD 26 /* a=*b */
+#define TAC_STORE 27 /* *a=b */
 
 typedef struct sym
 {
@@ -106,6 +111,11 @@ typedef struct exp
 	void *etc;
 } EXP;
 
+/* pointer helpers */
+int is_pointer_type(int data_type);
+int pointer_type_from_base(int base_type);
+int pointer_base_type(int pointer_type);
+
 /* global var */
 extern FILE *file_x, *file_s;
 extern int yylineno, scope, next_tmp, next_label;
@@ -145,6 +155,10 @@ EXP *do_bin( int binop, EXP *exp1, EXP *exp2);
 EXP *do_cmp( int binop, EXP *exp1, EXP *exp2);
 EXP *do_un( int unop, EXP *exp);
 EXP *do_call_ret(char *name, EXP *arglist);
+EXP *do_addr(SYM *var);
+EXP *do_deref(EXP *ptr);
+TAC *do_store(EXP *ptr, EXP *value);
+SYM *mk_tmp_type(int data_type);
 TAC *do_break_stmt(void);
 TAC *do_continue_stmt(void);
 void error(const char *format, ...);

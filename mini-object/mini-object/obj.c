@@ -494,6 +494,57 @@ void asm_code(TAC *c)
 		scope=0;
 		return;
 
+		case TAC_ADDR:
+		{
+			for(int r=R_GEN; r < R_NUM; r++) asm_write_back(r);
+			for(int r=R_GEN; r < R_NUM; r++) rdesc_clear(r);
+			int rd=R_GEN;
+			rdesc_fill(rd, c->a, MODIFIED);
+			int offset=c->b->offset;
+			if(c->b->scope==1)
+			{
+				out_str(file_s, "\tLOD R%u,R%u\n", rd, R_BP);
+			}
+			else
+			{
+				out_str(file_s, "\tLOD R%u,STATIC\n", rd);
+			}
+			if(offset!=0)
+			{
+				int rc=(rd==R_GEN)? R_GEN+1 : R_GEN;
+				if(rc>=R_NUM) rc=R_GEN+1; /* fallback within general regs */
+				out_str(file_s, "\tLOD R%u,%d\n", rc, abs(offset));
+				if(offset>=0)
+				{
+					out_str(file_s, "\tADD R%u,R%u\n", rd, rc);
+				}
+				else
+				{
+					out_str(file_s, "\tSUB R%u,R%u\n", rd, rc);
+				}
+			}
+			return;
+		}
+
+		case TAC_LOAD:
+		{
+			int rp=reg_alloc(c->b);
+			out_str(file_s, "\tLOD R%u,(R%u+0)\n", rp, rp);
+			rdesc_fill(rp, c->a, MODIFIED);
+			return;
+		}
+
+		case TAC_STORE:
+		{
+			int rp=reg_alloc(c->a);
+			int saved_mod=rdesc[rp].mod;
+			rdesc[rp].mod=MODIFIED;
+			int rv=reg_alloc(c->b);
+			rdesc[rp].mod=saved_mod;
+			out_str(file_s, "\tSTO (R%u+0),R%u\n", rp, rv);
+			return;
+		}
+
 		default:
 		/* Don't know what this one is */
 		error("unknown TAC opcode to translate");
