@@ -35,8 +35,7 @@ int current_decl_type = TYPE_INT;
 %right UMINUS DEREF ADDROF
 
 %type <tac> program function_declaration_list function_declaration function parameter_list variable_list declarator statement assignment_statement return_statement if_statement while_statement for_statement switch_statement break_statement continue_statement call_statement block declaration_list declaration statement_list input_statement output_statement for_init for_post case_statement_list
-%type <exp> argument_list expression_list expression call_expression expression_opt
-%type <exp> pointer_lvalue
+%type <exp> argument_list expression_list expression call_expression expression_opt pointer_lvalue array_reference
 %type <sym> function_head case_value
 %type <loop> switch_header
 %type <cases> case_clause
@@ -80,6 +79,10 @@ variable_list : declarator
 declarator : IDENTIFIER
 {
 	$$=declare_var($1, current_decl_type);
+}
+| IDENTIFIER '[' INTEGER ']'
+{
+	$$=declare_array($1, current_decl_type, atoi($3));
 }
 | '*' IDENTIFIER
 {
@@ -258,6 +261,10 @@ expression : expression '+' expression
 {
 	$$=$1;
 }               
+| array_reference
+{
+	$$=do_deref($1);
+}
 | error
 {
 	error("Bad expression syntax");
@@ -286,17 +293,15 @@ input_statement : INPUT IDENTIFIER
 }
 ;
 
-output_statement : OUTPUT IDENTIFIER
+output_statement : OUTPUT expression
 {
-	$$=do_output(get_var($2));
+	TAC *out=do_output($2->ret);
+	out->prev=$2->tac;
+	$$=out;
 }
 | OUTPUT TEXT
 {
 	$$=do_output(mk_text($2));
-}
-| OUTPUT CHARACTER
-{
-	$$=do_output(mk_char_const($2));
 }
 ;
 
@@ -396,9 +401,19 @@ continue_statement : CONTINUE
 }
 ;
 
+array_reference : IDENTIFIER '[' expression ']'
+{
+	$$=do_array_element(get_var($1), $3);
+}
+;
+
 pointer_lvalue : '*' IDENTIFIER
 {
 	$$=mk_exp(NULL, get_var($2), NULL);
+}
+| array_reference
+{
+	$$=$1;
 }
 ;
 

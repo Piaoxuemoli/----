@@ -98,6 +98,39 @@ int pointer_base_type(int pointer_type)
 	}
 }
 
+int is_array_type(int data_type)
+{
+	return data_type==TYPE_ARRAY_INT || data_type==TYPE_ARRAY_CHAR;
+}
+
+int array_base_type(int array_type)
+{
+	switch(array_type)
+	{
+		case TYPE_ARRAY_INT:
+		return TYPE_INT;
+		case TYPE_ARRAY_CHAR:
+		return TYPE_CHAR;
+		default:
+		error("subscript on non-array type");
+		return TYPE_INT;
+	}
+}
+
+int type_size(int data_type)
+{
+	switch(data_type)
+	{
+		case TYPE_CHAR:
+		case TYPE_INT:
+		case TYPE_PTR_INT:
+		case TYPE_PTR_CHAR:
+		return 4;
+		default:
+		return 4;
+	}
+}
+
 void tac_init()
 {
 	scope=0;
@@ -146,6 +179,7 @@ SYM *mk_sym(void)
 	SYM *t;
 	t=(SYM *)malloc(sizeof(SYM));
 	t->data_type=TYPE_INT;
+	t->etc=NULL;
 	return t;
 }
 
@@ -199,6 +233,58 @@ TAC *join_tac(TAC *c1, TAC *c2)
 TAC *declare_var(char *name, int data_type)
 {
 	return mk_tac(TAC_VAR,mk_var(name, data_type),NULL,NULL);
+}
+
+static SYM *mk_array(char *name, int base_type, int length)
+{
+	SYM *sym=NULL;
+
+	if(length<=0)
+	{
+		error("array length must be positive");
+		length=1;
+	}
+
+	if(!(base_type==TYPE_INT || base_type==TYPE_CHAR))
+	{
+		error("unsupported array element type");
+		base_type=TYPE_INT;
+	}
+
+	if(scope)
+		sym=lookup_sym(sym_tab_local,name);
+	else
+		sym=lookup_sym(sym_tab_global,name);
+
+	if(sym!=NULL)
+	{
+		error("variable already declared");
+		return NULL;
+	}
+
+	sym=mk_sym();
+	sym->type=SYM_VAR;
+	sym->name=name;
+	sym->offset=-1;
+	sym->data_type=(base_type==TYPE_INT) ? TYPE_ARRAY_INT : TYPE_ARRAY_CHAR;
+	ARRAY_INFO *info=(ARRAY_INFO *)malloc(sizeof(ARRAY_INFO));
+	info->length=length;
+	info->elem_type=base_type;
+	info->elem_size=type_size(base_type);
+	sym->etc=info;
+
+	if(scope)
+		insert_sym(&sym_tab_local,sym);
+	else
+		insert_sym(&sym_tab_global,sym);
+
+	return sym;
+}
+
+TAC *declare_array(char *name, int base_type, int length)
+{
+	SYM *sym=mk_array(name, base_type, length);
+	return mk_tac(TAC_VAR, sym, NULL, NULL);
 }
 
 TAC *mk_tac(int op, SYM *a, SYM *b, SYM *c)
@@ -342,12 +428,21 @@ EXP *do_addr(SYM *var)
 		error("address-of non-variable");
 		return mk_exp(NULL, NULL, NULL);
 	}
-	if(!(var->data_type==TYPE_INT || var->data_type==TYPE_CHAR))
+	int base_type;
+	if(is_array_type(var->data_type))
+	{
+		base_type=array_base_type(var->data_type);
+	}
+	else if(var->data_type==TYPE_INT || var->data_type==TYPE_CHAR)
+	{
+		base_type=var->data_type;
+	}
+	else
 	{
 		error("address-of unsupported type");
 		return mk_exp(NULL, NULL, NULL);
 	}
-	SYM *tmp=mk_tmp_type(pointer_type_from_base(var->data_type));
+	SYM *tmp=mk_tmp_type(pointer_type_from_base(base_type));
 	TAC *decl=mk_tac(TAC_VAR, tmp, NULL, NULL);
 	TAC *addr=mk_tac(TAC_ADDR, tmp, var, NULL);
 	addr->prev=decl;
@@ -393,6 +488,51 @@ TAC *do_store(EXP *ptr, EXP *value)
 	TAC *store=mk_tac(TAC_STORE, ptr->ret, value->ret, NULL);
 	store->prev=code;
 	return store;
+}
+
+EXP *do_array_element(SYM *array, EXP *index)
+{
+	if(array==NULL)
+	{
+		error("subscript on null symbol");
+		return mk_exp(NULL, NULL, NULL);
+	}
+	if(array->type!=SYM_VAR || !is_array_type(array->data_type))
+	{
+		error("subscript on non-array");
+		return mk_exp(NULL, NULL, NULL);
+	}
+	if(index==NULL || index->ret==NULL)
+	{
+		error("array index is invalid");
+		return mk_exp(NULL, NULL, NULL);
+	}
+	ARRAY_INFO *info=(ARRAY_INFO *)array->etc;
+	if(info==NULL)
+	{
+		error("array metadata missing");
+		return mk_exp(NULL, NULL, NULL);
+	}
+	SYM *scaled_tmp=mk_tmp();
+	TAC *decl=mk_tac(TAC_VAR, scaled_tmp, NULL, NULL);
+	decl->prev=index->tac;
+	SYM *elem_size_sym=mk_const(info->elem_size);
+	TAC *mul=mk_tac(TAC_MUL, scaled_tmp, index->ret, elem_size_sym);
+	mul->prev=decl;
+
+	EXP *base_exp=do_addr(array);
+	SYM *base_sym=base_exp->ret;
+	TAC *base_tac=base_exp->tac;
+	TAC *merged=join_tac(mul, base_tac);
+
+	SYM *addr_tmp=mk_tmp_type(pointer_type_from_base(info->elem_type));
+	TAC *addr_decl=mk_tac(TAC_VAR, addr_tmp, NULL, NULL);
+	addr_decl->prev=merged;
+	TAC *add=mk_tac(TAC_ADD, addr_tmp, base_sym, scaled_tmp);
+	add->prev=addr_decl;
+
+	free(base_exp);
+	return mk_exp(NULL, addr_tmp, add);
 }
 
 TAC *do_break_stmt(void)

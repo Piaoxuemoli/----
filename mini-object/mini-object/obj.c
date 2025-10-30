@@ -13,6 +13,19 @@ int oof; /* offset of formal */
 int oon; /* offset of next frame */
 struct rdesc rdesc[R_NUM];
 
+static int sym_size_bytes(SYM *sym)
+{
+	if(sym==NULL) return 4;
+	if(sym->type!=SYM_VAR) return 4;
+	if(is_array_type(sym->data_type))
+	{
+		ARRAY_INFO *info=(ARRAY_INFO *)sym->etc;
+		if(info==NULL) return 4;
+		return info->length * info->elem_size;
+	}
+	return 4;
+}
+
 void rdesc_clear(int r)    
 {
 	rdesc[r].var = NULL;
@@ -471,17 +484,20 @@ void asm_code(TAC *c)
 		return;
 
 		case TAC_VAR:
-		if(scope)
 		{
-			c->a->scope=1; /* local var */
-			c->a->offset=tof;
-			tof +=4;
-		}
-		else
-		{
-			c->a->scope=0; /* global var */
-			c->a->offset=tos;
-			tos +=4;
+			int size=sym_size_bytes(c->a);
+			if(scope)
+			{
+				c->a->scope=1; /* local var */
+				c->a->offset=tof;
+				tof +=size;
+			}
+			else
+			{
+				c->a->scope=0; /* global var */
+				c->a->offset=tos;
+				tos +=size;
+			}
 		}
 		return;
 

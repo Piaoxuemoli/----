@@ -10,11 +10,4 @@ main()
     output b;
     a='a';
     output a;
-    output "\n";
-	ch = 'X';
-	next = ch + 1;
-	output ch;
-	output "\n";
-	output next;
-	output "\n";
 }

@@ -3,6 +3,8 @@
 #define TYPE_CHAR 1
 #define TYPE_PTR_INT 2
 #define TYPE_PTR_CHAR 3
+#define TYPE_ARRAY_INT 4
+#define TYPE_ARRAY_CHAR 5
 
 /* type of symbol */
 #define SYM_UNDEF 0
@@ -111,10 +113,20 @@ typedef struct exp
 	void *etc;
 } EXP;
 
+typedef struct array_info
+{
+	int length;
+	int elem_type;
+	int elem_size;
+} ARRAY_INFO;
+
 /* pointer helpers */
 int is_pointer_type(int data_type);
 int pointer_type_from_base(int base_type);
 int pointer_base_type(int pointer_type);
+int is_array_type(int data_type);
+int array_base_type(int array_type);
+int type_size(int data_type);
 
 /* global var */
 extern FILE *file_x, *file_s;
@@ -131,6 +143,7 @@ void out_sym(FILE *f, SYM *s);
 void out_tac(FILE *f, TAC *i);
 SYM *mk_label(char *name);
 SYM *mk_tmp(void);
+SYM *mk_tmp_type(int data_type);
 SYM *mk_const(int n);
 SYM *mk_char_const(int n);
 SYM *mk_text(char *text);
@@ -141,6 +154,7 @@ SYM *get_var(char *name);
 SYM *declare_func(char *name);
 TAC *declare_var(char *name, int data_type);
 TAC *declare_para(char *name, int data_type);
+TAC *declare_array(char *name, int base_type, int length);
 TAC *do_func(SYM *name,    TAC *args, TAC *code);
 TAC *do_assign(SYM *var, EXP *exp);
 TAC *do_output(SYM *var);
@@ -158,7 +172,7 @@ EXP *do_call_ret(char *name, EXP *arglist);
 EXP *do_addr(SYM *var);
 EXP *do_deref(EXP *ptr);
 TAC *do_store(EXP *ptr, EXP *value);
-SYM *mk_tmp_type(int data_type);
+EXP *do_array_element(SYM *array, EXP *index);
 TAC *do_break_stmt(void);
 TAC *do_continue_stmt(void);
 void error(const char *format, ...);
