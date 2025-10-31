@@ -11,6 +11,14 @@ int current_decl_type = TYPE_INT;
 
 extern STRUCT_TYPE *current_struct_decl;
 
+static DIM_LIST *dim_list_prepend(DIM_LIST *tail, int length)
+{
+	DIM_LIST *node=(DIM_LIST *)malloc(sizeof(DIM_LIST));
+	node->length=length;
+	node->next=tail;
+	return node;
+}
+
 %}
 
 %union
@@ -27,6 +35,7 @@ extern STRUCT_TYPE *current_struct_decl;
 	EXP	*exp;
 	STRUCT_FIELD *struct_field;
 	STRUCT_TYPE *struct_type;
+	DIM_LIST *dimensions;
 }
 
 %token INT CHAR STRUCT EQ NE LT LE GT GE UMINUS IF ELSE WHILE FOR SWITCH CASE DEFAULT BREAK CONTINUE FUNC INPUT OUTPUT RETURN
@@ -48,6 +57,7 @@ extern STRUCT_TYPE *current_struct_decl;
 %type <number> type_specifier
 %type <struct_field> struct_field_list struct_field_decl
 %type <struct_type> struct_definition
+%type <dimensions> array_dimensions
 
 %%
 
@@ -94,9 +104,9 @@ declarator : IDENTIFIER
 {
 	$$=declare_var($1, current_decl_type);
 }
-| IDENTIFIER '[' INTEGER ']'
+| IDENTIFIER array_dimensions
 {
-	$$=declare_array($1, current_decl_type, atoi($3));
+	$$=declare_array($1, current_decl_type, $2);
 }
 | '*' IDENTIFIER
 {
@@ -109,6 +119,16 @@ declarator : IDENTIFIER
 	{
 		$$=declare_var($2, pointer_type_from_base(current_decl_type));
 	}
+}
+;
+
+array_dimensions : '[' INTEGER ']' array_dimensions
+{
+	$$=dim_list_prepend($4, atoi($2));
+}
+| '[' INTEGER ']'
+{
+	$$=dim_list_prepend(NULL, atoi($2));
 }
 ;
 
@@ -179,19 +199,19 @@ struct_field_list : struct_field_list struct_field_decl
 
 struct_field_decl : INT IDENTIFIER ';'
 {
-	$$=struct_field_create($2, TYPE_INT, 0, NULL);
+	$$=struct_field_create($2, TYPE_INT, NULL, NULL);
+}
+| INT IDENTIFIER array_dimensions ';'
+{
+	$$=struct_field_create($2, TYPE_INT, $3, NULL);
 }
 | CHAR IDENTIFIER ';'
 {
-	$$=struct_field_create($2, TYPE_CHAR, 0, NULL);
+	$$=struct_field_create($2, TYPE_CHAR, NULL, NULL);
 }
-| INT IDENTIFIER '[' INTEGER ']' ';'
+| CHAR IDENTIFIER array_dimensions ';'
 {
-	$$=struct_field_create($2, TYPE_INT, atoi($4), NULL);
-}
-| CHAR IDENTIFIER '[' INTEGER ']' ';'
-{
-	$$=struct_field_create($2, TYPE_CHAR, atoi($4), NULL);
+	$$=struct_field_create($2, TYPE_CHAR, $3, NULL);
 }
 | STRUCT IDENTIFIER IDENTIFIER ';'
 {
@@ -203,10 +223,10 @@ struct_field_decl : INT IDENTIFIER ';'
 	}
 	else
 	{
-		$$=struct_field_create($3, TYPE_STRUCT, 0, stype);
+		$$=struct_field_create($3, TYPE_STRUCT, NULL, stype);
 	}
 }
-| STRUCT IDENTIFIER IDENTIFIER '[' INTEGER ']' ';'
+| STRUCT IDENTIFIER IDENTIFIER array_dimensions ';'
 {
 	STRUCT_TYPE *stype=struct_lookup($2);
 	if(stype==NULL)
@@ -216,7 +236,7 @@ struct_field_decl : INT IDENTIFIER ';'
 	}
 	else
 	{
-		$$=struct_field_create($3, TYPE_STRUCT, atoi($5), stype);
+		$$=struct_field_create($3, TYPE_STRUCT, $4, stype);
 	}
 }
 ;
@@ -535,6 +555,10 @@ array_reference : IDENTIFIER '[' expression ']'
 	$$=do_array_element(get_var($1), $3);
 }
 | struct_reference '[' expression ']'
+{
+	$$=do_array_element_from_exp($1, $3);
+}
+| array_reference '[' expression ']'
 {
 	$$=do_array_element_from_exp($1, $3);
 }

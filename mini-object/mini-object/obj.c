@@ -21,7 +21,7 @@ static int sym_size_bytes(SYM *sym)
 	{
 		ARRAY_INFO *info=(ARRAY_INFO *)sym->etc;
 		if(info==NULL) return 4;
-		return info->length * info->elem_size;
+		return info->total_size;
 	}
 	if(sym->data_type==TYPE_STRUCT)
 	{

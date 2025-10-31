@@ -88,6 +88,77 @@ static void cse_clear(void)
 	}
 }
 
+static void dim_list_free(DIM_LIST *dims)
+{
+	while(dims!=NULL)
+	{
+		DIM_LIST *next=dims->next;
+		free(dims);
+		dims=next;
+	}
+}
+
+static ARRAY_INFO *array_info_new(int length, int base_type, int base_size, STRUCT_TYPE *base_struct, ARRAY_INFO *child)
+{
+	ARRAY_INFO *info=(ARRAY_INFO *)malloc(sizeof(ARRAY_INFO));
+	info->length=length;
+	info->elem_type=base_type;
+	info->elem_size=base_size;
+	info->elem_struct=base_struct;
+	info->child=child;
+	info->stride=(child!=NULL) ? child->total_size : base_size;
+	info->total_size=info->length * info->stride;
+	return info;
+}
+
+static ARRAY_INFO *array_info_clone(const ARRAY_INFO *info)
+{
+	if(info==NULL) return NULL;
+	ARRAY_INFO *child_copy=array_info_clone(info->child);
+	return array_info_new(info->length, info->elem_type, info->elem_size, info->elem_struct, child_copy);
+}
+
+static void array_info_free(ARRAY_INFO *info)
+{
+	if(info==NULL) return;
+	array_info_free(info->child);
+	free(info);
+}
+
+static ARRAY_INFO *array_info_build_recursive(DIM_LIST *dims, int base_type, int base_size, STRUCT_TYPE *base_struct)
+{
+	if(dims==NULL) return NULL;
+	ARRAY_INFO *child=array_info_build_recursive(dims->next, base_type, base_size, base_struct);
+	return array_info_new(dims->length, base_type, base_size, base_struct, child);
+}
+
+static ARRAY_INFO *array_info_build(int base_type, STRUCT_TYPE *base_struct, DIM_LIST *dims)
+{
+	if(dims==NULL)
+	{
+		error("array requires at least one dimension");
+		return NULL;
+	}
+	int base_size;
+	if(base_type==TYPE_STRUCT)
+	{
+		if(base_struct==NULL)
+		{
+			error("struct type not specified for array");
+			base_size=type_size(TYPE_INT);
+		}
+		else
+		{
+			base_size=base_struct->size;
+		}
+	}
+	else
+	{
+		base_size=type_size(base_type);
+	}
+	return array_info_build_recursive(dims, base_type, base_size, base_struct);
+}
+
 typedef struct loop_ctx
 {
 	SYM *continue_label;
@@ -229,45 +300,74 @@ static int sym_const_value(SYM *sym)
 	return sym->value;
 }
 
-STRUCT_FIELD *struct_field_create(char *name, int base_type, int length, STRUCT_TYPE *elem_struct)
+static int exp_is_const_int(EXP *exp, long long *value)
+{
+	if(exp==NULL)
+	{
+		return 0;
+	}
+	if(exp->tac!=NULL)
+	{
+		return 0;
+	}
+	if(!sym_is_numeric_const(exp->ret))
+	{
+		return 0;
+	}
+	if(value!=NULL)
+	{
+		*value=sym_const_value(exp->ret);
+	}
+	return 1;
+}
+
+STRUCT_FIELD *struct_field_create(char *name, int base_type, DIM_LIST *dims, STRUCT_TYPE *elem_struct)
 {
 	STRUCT_FIELD *field=(STRUCT_FIELD *)malloc(sizeof(STRUCT_FIELD));
 	field->name=name;
-	field->array_length=length;
 	field->elem_type=base_type;
 	field->elem_struct=elem_struct;
-	if(base_type==TYPE_STRUCT)
+	field->array_info=NULL;
+	if(base_type==TYPE_STRUCT && elem_struct==NULL)
 	{
-		if(elem_struct==NULL)
-		{
-			error("struct field missing type");
-			field->elem_size=0;
-		}
-		else
-		{
-			field->elem_size=elem_struct->size;
-		}
+		error("struct field missing type");
 	}
-	else
+	if(dims!=NULL)
 	{
-		field->elem_size=type_size(base_type);
-	}
-	if(length>0)
-	{
+		ARRAY_INFO *info=array_info_build(base_type, elem_struct, dims);
+		dim_list_free(dims);
+		field->array_info=info;
 		if(base_type==TYPE_INT)
 			field->type=TYPE_ARRAY_INT;
 		else if(base_type==TYPE_CHAR)
 			field->type=TYPE_ARRAY_CHAR;
-		else if(base_type==TYPE_STRUCT)
-			field->type=TYPE_ARRAY_STRUCT;
 		else
-			field->type=base_type;
-		field->size=field->elem_size * length;
+			field->type=TYPE_ARRAY_STRUCT;
+		if(info!=NULL)
+		{
+			field->elem_size=info->stride;
+			field->size=info->total_size;
+		}
+		else
+		{
+			field->elem_size=type_size(base_type);
+			field->size=field->elem_size;
+		}
 	}
 	else
 	{
+		field->array_info=NULL;
 		field->type=base_type;
-		field->size=field->elem_size;
+		if(base_type==TYPE_STRUCT && elem_struct!=NULL)
+		{
+			field->elem_size=elem_struct->size;
+			field->size=elem_struct->size;
+		}
+		else
+		{
+			field->elem_size=type_size(base_type);
+			field->size=field->elem_size;
+		}
 	}
 	field->offset=0;
 	field->next=NULL;
@@ -300,7 +400,7 @@ static void struct_validate_fields(STRUCT_FIELD *fields)
 {
 	for(STRUCT_FIELD *a=fields; a!=NULL; a=a->next)
 	{
-		int base_type = (a->array_length>0) ? a->elem_type : a->type;
+		int base_type = a->elem_type;
 		if(!(base_type==TYPE_INT || base_type==TYPE_CHAR || base_type==TYPE_STRUCT))
 		{
 			error("unsupported field type in struct");
@@ -359,7 +459,7 @@ STRUCT_TYPE *struct_define(char *name, STRUCT_FIELD *fields)
 	return stype;
 }
 
-void tac_init()
+void tac_init(void)
 {
 	scope=0;
 	sym_tab_global=NULL;
@@ -370,7 +470,7 @@ void tac_init()
 	cse_clear();
 }
 
-void tac_complete()
+void tac_complete(void)
 {
 	TAC *cur=NULL; 		/* Current TAC */
 	TAC *prev=tac_last; 	/* Previous TAC */
@@ -408,8 +508,16 @@ SYM *mk_sym(void)
 {
 	SYM *t;
 	t=(SYM *)malloc(sizeof(SYM));
+	t->name=NULL;
+	t->type=SYM_UNDEF;
+	t->scope=0;
+	t->offset=0;
 	t->data_type=TYPE_INT;
+	t->value=0;
+	t->label=0;
+	t->address=NULL;
 	t->etc=NULL;
+	t->next=NULL;
 	return t;
 }
 
@@ -473,15 +581,9 @@ TAC *declare_var(char *name, int data_type)
 	return mk_tac(TAC_VAR,mk_var(name, data_type),NULL,NULL);
 }
 
-static SYM *mk_array(char *name, int base_type, int length)
+static SYM *mk_array(char *name, int base_type, DIM_LIST *dims)
 {
 	SYM *sym=NULL;
-
-	if(length<=0)
-	{
-		error("array length must be positive");
-		length=1;
-	}
 
 	STRUCT_TYPE *stype=NULL;
 	if(base_type==TYPE_STRUCT)
@@ -499,6 +601,24 @@ static SYM *mk_array(char *name, int base_type, int length)
 		base_type=TYPE_INT;
 	}
 
+	if(dims==NULL)
+	{
+		error("array requires at least one dimension");
+		DIM_LIST *node=(DIM_LIST *)malloc(sizeof(DIM_LIST));
+		node->length=1;
+		node->next=NULL;
+		dims=node;
+	}
+
+	for(DIM_LIST *iter=dims; iter!=NULL; iter=iter->next)
+	{
+		if(iter->length<=0)
+		{
+			error("array length must be positive");
+			iter->length=1;
+		}
+	}
+
 	if(scope)
 		sym=lookup_sym(sym_tab_local,name);
 	else
@@ -507,6 +627,7 @@ static SYM *mk_array(char *name, int base_type, int length)
 	if(sym!=NULL)
 	{
 		error("variable already declared");
+		dim_list_free(dims);
 		return NULL;
 	}
 
@@ -520,19 +641,9 @@ static SYM *mk_array(char *name, int base_type, int length)
 		sym->data_type=TYPE_ARRAY_CHAR;
 	else
 		sym->data_type=TYPE_ARRAY_STRUCT;
-	ARRAY_INFO *info=(ARRAY_INFO *)malloc(sizeof(ARRAY_INFO));
-	info->length=length;
-	info->elem_type=base_type;
-	if(base_type==TYPE_STRUCT && stype!=NULL)
-	{
-		info->elem_size=stype->size;
-		info->elem_struct=stype;
-	}
-	else
-	{
-		info->elem_size=type_size(base_type);
-		info->elem_struct=NULL;
-	}
+	STRUCT_TYPE *array_struct=(base_type==TYPE_STRUCT) ? stype : NULL;
+	ARRAY_INFO *info=array_info_build(base_type, array_struct, dims);
+	dim_list_free(dims);
 	sym->etc=info;
 
 	if(scope)
@@ -543,9 +654,9 @@ static SYM *mk_array(char *name, int base_type, int length)
 	return sym;
 }
 
-TAC *declare_array(char *name, int base_type, int length)
+TAC *declare_array(char *name, int base_type, DIM_LIST *dims)
 {
-	SYM *sym=mk_array(name, base_type, length);
+	SYM *sym=mk_array(name, base_type, dims);
 	if(sym==NULL) return NULL;
 	return mk_tac(TAC_VAR, sym, NULL, NULL);
 }
@@ -785,14 +896,16 @@ EXP *do_array_element(SYM *array, EXP *index)
 		error("array index is invalid");
 		return mk_exp(NULL, NULL, NULL);
 	}
+
 	int elem_type;
-	int elem_size;
 	STRUCT_TYPE *elem_struct=NULL;
 	ARRAY_INFO *info=NULL;
+	ARRAY_INFO *next_dims=NULL;
 	EXP *base_exp=NULL;
 	SYM *base_sym=NULL;
 	TAC *base_tac=NULL;
 	int stride_const=-1;
+
 	if(is_array_type(array->data_type))
 	{
 		info=(ARRAY_INFO *)array->etc;
@@ -802,24 +915,23 @@ EXP *do_array_element(SYM *array, EXP *index)
 			return mk_exp(NULL, NULL, NULL);
 		}
 		elem_type=info->elem_type;
-		elem_size=info->elem_size;
 		elem_struct=info->elem_struct;
 		base_exp=do_addr(array);
 		base_sym=base_exp->ret;
 		base_tac=base_exp->tac;
-		stride_const=elem_size;
+		stride_const=info->stride;
+		next_dims=array_info_clone(info->child);
 	}
 	else if(is_pointer_type(array->data_type))
 	{
 		elem_type=pointer_base_type(array->data_type);
-		elem_size=type_size(elem_type);
+		stride_const=type_size(elem_type);
 		if(elem_type==TYPE_STRUCT)
 		{
 			elem_struct=(STRUCT_TYPE *)array->etc;
 		}
 		base_sym=array;
 		base_tac=NULL;
-		stride_const=elem_size;
 	}
 	else
 	{
@@ -846,8 +958,8 @@ EXP *do_array_element(SYM *array, EXP *index)
 	}
 	else
 	{
-		SYM *elem_size_sym=mk_const(elem_size);
-		mul=mk_tac(TAC_MUL, scaled_tmp, index->ret, elem_size_sym);
+		SYM *stride_sym=mk_const(stride_const);
+		mul=mk_tac(TAC_MUL, scaled_tmp, index->ret, stride_sym);
 		mul->prev=decl;
 	}
 
@@ -855,12 +967,18 @@ EXP *do_array_element(SYM *array, EXP *index)
 
 	int ptr_type = (elem_type==TYPE_STRUCT) ? TYPE_PTR_CHAR : pointer_type_from_base(elem_type);
 	SYM *addr_tmp=mk_tmp_type(ptr_type);
+	addr_tmp->etc=next_dims;
 	TAC *addr_decl=mk_tac(TAC_VAR, addr_tmp, NULL, NULL);
 	addr_decl->prev=merged;
 	SYM *base_symbol=base_sym;
 	if(base_symbol==NULL)
 	{
 		error("array base computation failed");
+		if(next_dims!=NULL)
+		{
+			array_info_free(next_dims);
+			addr_tmp->etc=NULL;
+		}
 		if(base_exp!=NULL) free(base_exp);
 		return mk_exp(NULL, NULL, NULL);
 	}
@@ -868,7 +986,19 @@ EXP *do_array_element(SYM *array, EXP *index)
 	add->prev=addr_decl;
 
 	EXP *result=mk_exp(NULL, addr_tmp, add);
-	result->etc = (elem_type==TYPE_STRUCT) ? (void *)elem_struct : NULL;
+	if(next_dims!=NULL)
+	{
+		result->etc=NULL;
+	}
+	else if(elem_type==TYPE_STRUCT)
+	{
+		result->etc=elem_struct;
+	}
+	else
+	{
+		result->etc=NULL;
+	}
+
 	if(base_exp!=NULL)
 	{
 		free(base_exp);
@@ -876,45 +1006,83 @@ EXP *do_array_element(SYM *array, EXP *index)
 	return result;
 }
 
-	EXP *do_array_element_from_exp(EXP *base_ptr, EXP *index)
+EXP *do_array_element_from_exp(EXP *base_ptr, EXP *index)
+{
+	if(base_ptr==NULL || base_ptr->ret==NULL)
 	{
-		if(base_ptr==NULL || base_ptr->ret==NULL)
-		{
-			error("array reference on invalid expression");
-			return mk_exp(NULL, NULL, NULL);
-		}
-		if(index==NULL || index->ret==NULL)
-		{
-			error("array index is invalid");
-			free(base_ptr);
-			return mk_exp(NULL, NULL, NULL);
-		}
-		ARRAY_INFO *info=(ARRAY_INFO *)base_ptr->etc;
-		if(info==NULL)
-		{
-			error("array metadata missing");
-			free(base_ptr);
-			return mk_exp(NULL, NULL, NULL);
-		}
-		SYM *scaled_tmp=mk_tmp();
-		TAC *decl=mk_tac(TAC_VAR, scaled_tmp, NULL, NULL);
-		decl->prev=index->tac;
-		SYM *elem_size_sym=mk_const(info->elem_size);
-		TAC *mul=mk_tac(TAC_MUL, scaled_tmp, index->ret, elem_size_sym);
-		mul->prev=decl;
-		TAC *merged=join_tac(mul, base_ptr->tac);
-		int ptr_type = (info->elem_type==TYPE_STRUCT) ? TYPE_PTR_CHAR : pointer_type_from_base(info->elem_type);
-		SYM *addr_tmp=mk_tmp_type(ptr_type);
-		TAC *addr_decl=mk_tac(TAC_VAR, addr_tmp, NULL, NULL);
-		addr_decl->prev=merged;
-		TAC *add=mk_tac(TAC_ADD, addr_tmp, base_ptr->ret, scaled_tmp);
-		add->prev=addr_decl;
-		EXP *result=mk_exp(NULL, addr_tmp, add);
-		result->etc = (info->elem_type==TYPE_STRUCT) ? (void *)info->elem_struct : NULL;
-		free(info);
-		free(base_ptr);
-		return result;
+		error("array reference on invalid expression");
+		return mk_exp(NULL, NULL, NULL);
 	}
+	if(index==NULL || index->ret==NULL)
+	{
+		error("array index is invalid");
+		free(base_ptr);
+		return mk_exp(NULL, NULL, NULL);
+	}
+	ARRAY_INFO *info=(ARRAY_INFO *)base_ptr->ret->etc;
+	base_ptr->ret->etc=NULL;
+	if(info==NULL)
+	{
+		error("array metadata missing");
+		free(base_ptr);
+		return mk_exp(NULL, NULL, NULL);
+	}
+	int elem_type=info->elem_type;
+	STRUCT_TYPE *elem_struct=info->elem_struct;
+	ARRAY_INFO *next_dims=array_info_clone(info->child);
+	int stride_const=info->stride;
+
+	SYM *scaled_tmp=mk_tmp();
+	TAC *decl=mk_tac(TAC_VAR, scaled_tmp, NULL, NULL);
+	decl->prev=index->tac;
+	TAC *mul=NULL;
+	if(sym_is_numeric_const(index->ret) && index->tac==NULL)
+	{
+		int folded=stride_const * sym_const_value(index->ret);
+		TAC *assign=mk_tac(TAC_COPY, scaled_tmp, mk_const(folded), NULL);
+		assign->prev=decl;
+		mul=assign;
+	}
+	else if(stride_const==1)
+	{
+		TAC *assign=mk_tac(TAC_COPY, scaled_tmp, index->ret, NULL);
+		assign->prev=decl;
+		mul=assign;
+	}
+	else
+	{
+		SYM *stride_sym=mk_const(stride_const);
+		mul=mk_tac(TAC_MUL, scaled_tmp, index->ret, stride_sym);
+		mul->prev=decl;
+	}
+
+	TAC *merged=join_tac(mul, base_ptr->tac);
+
+	int ptr_type = (elem_type==TYPE_STRUCT) ? TYPE_PTR_CHAR : pointer_type_from_base(elem_type);
+	SYM *addr_tmp=mk_tmp_type(ptr_type);
+	addr_tmp->etc=next_dims;
+	TAC *addr_decl=mk_tac(TAC_VAR, addr_tmp, NULL, NULL);
+	addr_decl->prev=merged;
+	TAC *add=mk_tac(TAC_ADD, addr_tmp, base_ptr->ret, scaled_tmp);
+	add->prev=addr_decl;
+	EXP *result=mk_exp(NULL, addr_tmp, add);
+	if(next_dims!=NULL)
+	{
+		result->etc=NULL;
+	}
+	else if(elem_type==TYPE_STRUCT)
+	{
+		result->etc=elem_struct;
+	}
+	else
+	{
+		result->etc=NULL;
+	}
+
+	array_info_free(info);
+	free(base_ptr);
+	return result;
+}
 static EXP *struct_field_from_address(EXP *addr_exp, STRUCT_TYPE *stype, char *field_name)
 {
 	if(stype==NULL)
@@ -931,7 +1099,7 @@ static EXP *struct_field_from_address(EXP *addr_exp, STRUCT_TYPE *stype, char *f
 		return mk_exp(NULL, NULL, NULL);
 	}
 	int ptr_type;
-	if(field->array_length>0)
+	if(field->array_info!=NULL)
 	{
 		ptr_type = pointer_type_from_base(field->elem_type);
 	}
@@ -946,25 +1114,23 @@ static EXP *struct_field_from_address(EXP *addr_exp, STRUCT_TYPE *stype, char *f
 	TAC *add=mk_tac(TAC_ADD, addr_tmp, addr_exp->ret, offset_sym);
 	add->prev=decl;
 	EXP *result=mk_exp(NULL, addr_tmp, add);
-	if(field->array_length>0)
+	if(addr_exp->ret!=NULL && addr_exp->ret->etc!=NULL)
 	{
-		ARRAY_INFO *info=(ARRAY_INFO *)malloc(sizeof(ARRAY_INFO));
-		info->length=field->array_length;
-		info->elem_type=field->elem_type;
-		info->elem_size=field->elem_size;
-		info->elem_struct=field->elem_struct;
-		result->etc=info;
+		array_info_free((ARRAY_INFO *)addr_exp->ret->etc);
+		addr_exp->ret->etc=NULL;
+	}
+	if(field->array_info!=NULL)
+	{
+		addr_tmp->etc=array_info_clone(field->array_info);
+		result->etc=NULL;
+	}
+	else if(field->type==TYPE_STRUCT)
+	{
+		result->etc=field->elem_struct;
 	}
 	else
 	{
-		if(field->type==TYPE_STRUCT)
-		{
-			result->etc=field->elem_struct;
-		}
-		else
-		{
-			result->etc=NULL;
-		}
+		result->etc=NULL;
 	}
 	free(addr_exp);
 	return result;
@@ -1034,14 +1200,19 @@ EXP *do_bin( int binop, EXP *exp1, EXP *exp2)
 		return mk_exp(NULL, NULL, NULL);
 	}
 
+	long long lhs_val=0;
+	long long rhs_val=0;
+	int lhs_const=exp_is_const_int(exp1, &lhs_val);
+	int rhs_const=exp_is_const_int(exp2, &rhs_val);
+
 	if(binop==TAC_ADD)
 	{
-		if(sym_is_numeric_const(exp1->ret) && exp1->tac==NULL && sym_const_value(exp1->ret)==0)
+		if(lhs_const && lhs_val==0)
 		{
 			free(exp1);
 			return exp2;
 		}
-		if(sym_is_numeric_const(exp2->ret) && exp2->tac==NULL && sym_const_value(exp2->ret)==0)
+		if(rhs_const && rhs_val==0)
 		{
 			free(exp2);
 			return exp1;
@@ -1049,7 +1220,55 @@ EXP *do_bin( int binop, EXP *exp1, EXP *exp2)
 	}
 	else if(binop==TAC_SUB)
 	{
-		if(sym_is_numeric_const(exp2->ret) && exp2->tac==NULL && sym_const_value(exp2->ret)==0)
+		if(rhs_const && rhs_val==0)
+		{
+			free(exp2);
+			return exp1;
+		}
+		if(lhs_const && lhs_val==0 && exp2->ret!=NULL)
+		{
+			free(exp1);
+			return do_un(TAC_NEG, exp2);
+		}
+		if(exp1->tac==NULL && exp2->tac==NULL && exp1->ret==exp2->ret)
+		{
+			free(exp2);
+			exp1->ret=mk_const(0);
+			exp1->tac=NULL;
+			return exp1;
+		}
+	}
+	else if(binop==TAC_MUL)
+	{
+		if(lhs_const && lhs_val==0 && exp2->tac==NULL)
+		{
+			free(exp2);
+			return exp1;
+		}
+		if(rhs_const && rhs_val==0 && exp1->tac==NULL)
+		{
+			free(exp1);
+			return exp2;
+		}
+		if(lhs_const && lhs_val==1)
+		{
+			free(exp1);
+			return exp2;
+		}
+		if(rhs_const && rhs_val==1)
+		{
+			free(exp2);
+			return exp1;
+		}
+	}
+	else if(binop==TAC_DIV)
+	{
+		if(rhs_const && rhs_val==1)
+		{
+			free(exp2);
+			return exp1;
+		}
+		if(lhs_const && lhs_val==0 && exp2->tac==NULL)
 		{
 			free(exp2);
 			return exp1;
@@ -1068,10 +1287,10 @@ EXP *do_bin( int binop, EXP *exp1, EXP *exp2)
 		}
 	}
 
-	if(sym_is_numeric_const(exp1->ret) && sym_is_numeric_const(exp2->ret) && exp1->tac==NULL && exp2->tac==NULL)
+	if(lhs_const && rhs_const)
 	{
-		long long v1=sym_const_value(exp1->ret);
-		long long v2=sym_const_value(exp2->ret);
+		long long v1=lhs_val;
+		long long v2=rhs_val;
 		long long folded=0;
 		int can_fold=0;
 		switch(binop)
@@ -1155,6 +1374,73 @@ EXP *do_cmp( int binop, EXP *exp1, EXP *exp2)
 	TAC *temp; /* TAC code for temp symbol */
 	TAC *ret; /* TAC code for result */
 
+	if(exp1==NULL || exp2==NULL)
+	{
+		error("comparison on invalid expression");
+		return mk_exp(NULL, NULL, NULL);
+	}
+
+	long long lhs_val=0;
+	long long rhs_val=0;
+	int lhs_const=exp_is_const_int(exp1, &lhs_val);
+	int rhs_const=exp_is_const_int(exp2, &rhs_val);
+
+	if(lhs_const && rhs_const)
+	{
+		int result=0;
+		switch(binop)
+		{
+			case TAC_EQ:
+			result=(lhs_val==rhs_val);
+			break;
+			case TAC_NE:
+			result=(lhs_val!=rhs_val);
+			break;
+			case TAC_LT:
+			result=(lhs_val<rhs_val);
+			break;
+			case TAC_LE:
+			result=(lhs_val<=rhs_val);
+			break;
+			case TAC_GT:
+			result=(lhs_val>rhs_val);
+			break;
+			case TAC_GE:
+			result=(lhs_val>=rhs_val);
+			break;
+			default:
+			break;
+		}
+		free(exp2);
+		exp1->ret=mk_const(result);
+		exp1->tac=NULL;
+		return exp1;
+	}
+
+	if(exp1->tac==NULL && exp2->tac==NULL && exp1->ret==exp2->ret)
+	{
+		int result=0;
+		switch(binop)
+		{
+			case TAC_EQ:
+			case TAC_LE:
+			case TAC_GE:
+			result=1;
+			break;
+			case TAC_NE:
+			case TAC_LT:
+			case TAC_GT:
+			result=0;
+			break;
+			default:
+			break;
+		}
+		free(exp2);
+		exp1->ret=mk_const(result);
+		exp1->tac=NULL;
+		return exp1;
+	}
+
 	temp=mk_tac(TAC_VAR, mk_tmp(), NULL, NULL);
 	temp->prev=join_tac(exp1->tac, exp2->tac);
 	ret=mk_tac(binop, temp->a, exp1->ret, exp2->ret);
@@ -1170,6 +1456,23 @@ EXP *do_un( int unop, EXP *exp)
 {
 	TAC *temp; /* TAC code for temp symbol */
 	TAC *ret; /* TAC code for result */
+
+	if(exp==NULL)
+	{
+		error("unary op on invalid expression");
+		return mk_exp(NULL, NULL, NULL);
+	}
+
+	if(unop==TAC_NEG)
+	{
+		long long val=0;
+		if(exp_is_const_int(exp, &val))
+		{
+			exp->ret=mk_const((int)(-val));
+			exp->tac=NULL;
+			return exp;
+		}
+	}
 
 	temp=mk_tac(TAC_VAR, mk_tmp(), NULL, NULL);
 	temp->prev=exp->tac;
@@ -1424,6 +1727,7 @@ EXP *mk_exp(EXP *next, SYM *ret, TAC *code)
 	exp->next=next;
 	exp->ret=ret;
 	exp->tac=code;
+	exp->etc=NULL;
 
 	return exp;
 }

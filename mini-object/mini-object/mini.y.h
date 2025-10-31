@@ -125,7 +125,7 @@ extern int yydebug;
 #if ! defined YYSTYPE && ! defined YYSTYPE_IS_DECLARED
 union YYSTYPE
 {
-#line 17 "mini.y"
+#line 25 "mini.y"
 
 	char character;
 	char *string;
@@ -139,8 +139,9 @@ union YYSTYPE
 	EXP	*exp;
 	STRUCT_FIELD *struct_field;
 	STRUCT_TYPE *struct_type;
+	DIM_LIST *dimensions;
 
-#line 144 "mini.y.h"
+#line 145 "mini.y.h"
 
 };
 typedef union YYSTYPE YYSTYPE;
