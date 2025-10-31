@@ -1864,7 +1864,7 @@ yyreduce:
   case 74: /* expression: IDENTIFIER  */
 #line 393 "mini.y"
 {
-	(yyval.exp)=mk_exp(NULL, get_var((yyvsp[0].string)), NULL);
+	(yyval.exp)=mk_var_exp(get_var((yyvsp[0].string)));
 }
 #line 1870 "mini.y.c"
     break;

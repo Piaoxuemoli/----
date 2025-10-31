@@ -29,6 +29,10 @@ static int cse_is_commutative(int op)
 	return op==TAC_ADD || op==TAC_MUL;
 }
 
+static void const_invalidate_sym(SYM *sym);
+static void const_invalidate_all(void);
+static void const_record_assignment(SYM *var, EXP *exp);
+
 static SYM *cse_lookup(int op, SYM *lhs, SYM *rhs)
 {
 	if(lhs==NULL || rhs==NULL) return NULL;
@@ -62,6 +66,7 @@ static void cse_insert(int op, SYM *lhs, SYM *rhs, SYM *result)
 static void cse_kill_sym(SYM *sym)
 {
 	if(sym==NULL) return;
+	const_invalidate_sym(sym);
 	CSE_ENTRY **pp=&cse_entries;
 	while(*pp!=NULL)
 	{
@@ -321,6 +326,59 @@ static int exp_is_const_int(EXP *exp, long long *value)
 	return 1;
 }
 
+static void const_invalidate_sym(SYM *sym)
+{
+	if(sym==NULL)
+	{
+		return;
+	}
+	if(sym->type==SYM_VAR)
+	{
+		sym->is_const=0;
+	}
+}
+
+static void const_invalidate_all(void)
+{
+	for(SYM *iter=sym_tab_local; iter!=NULL; iter=iter->next)
+	{
+		if(iter->type==SYM_VAR)
+		{
+			iter->is_const=0;
+		}
+	}
+	for(SYM *iter=sym_tab_global; iter!=NULL; iter=iter->next)
+	{
+		if(iter->type==SYM_VAR)
+		{
+			iter->is_const=0;
+		}
+	}
+}
+
+static void const_record_assignment(SYM *var, EXP *exp)
+{
+	if(var==NULL || var->type!=SYM_VAR)
+	{
+		return;
+	}
+	if(!(var->data_type==TYPE_INT || var->data_type==TYPE_CHAR))
+	{
+		var->is_const=0;
+		return;
+	}
+	long long value=0;
+	if(exp_is_const_int(exp, &value))
+	{
+		var->is_const=1;
+		var->const_value=(int)value;
+	}
+	else
+	{
+		var->is_const=0;
+	}
+}
+
 STRUCT_FIELD *struct_field_create(char *name, int base_type, DIM_LIST *dims, STRUCT_TYPE *elem_struct)
 {
 	STRUCT_FIELD *field=(STRUCT_FIELD *)malloc(sizeof(STRUCT_FIELD));
@@ -517,6 +575,8 @@ SYM *mk_sym(void)
 	t->label=0;
 	t->address=NULL;
 	t->etc=NULL;
+	t->is_const=0;
+	t->const_value=0;
 	t->next=NULL;
 	return t;
 }
@@ -543,6 +603,7 @@ SYM *mk_var(char *name, int data_type)
 	sym->name=name;
 	sym->offset=-1; /* Unset address */
 	sym->data_type=data_type;
+	sym->scope = scope ? 1 : 0;
 	if(data_type==TYPE_STRUCT)
 	{
 		if(current_struct_decl==NULL)
@@ -635,6 +696,7 @@ static SYM *mk_array(char *name, int base_type, DIM_LIST *dims)
 	sym->type=SYM_VAR;
 	sym->name=name;
 	sym->offset=-1;
+	sym->scope = scope ? 1 : 0;
 	if(base_type==TYPE_INT)
 		sym->data_type=TYPE_ARRAY_INT;
 	else if(base_type==TYPE_CHAR)
@@ -768,6 +830,7 @@ TAC *do_assign(SYM *var, EXP *exp)
 
 	code=mk_tac(TAC_COPY, var, exp->ret, NULL);
 	code->prev=exp->tac;
+	const_record_assignment(var, exp);
 
 	return code;
 }
@@ -868,6 +931,7 @@ TAC *do_store(EXP *ptr, EXP *value)
 		return NULL;
 	}
 	cse_clear();
+	const_invalidate_all();
 	TAC *code=join_tac(ptr->tac, value->tac);
 	TAC *store=mk_tac(TAC_STORE, ptr->ret, value->ret, NULL);
 	store->prev=code;
@@ -1730,6 +1794,25 @@ EXP *mk_exp(EXP *next, SYM *ret, TAC *code)
 	exp->etc=NULL;
 
 	return exp;
+}
+
+EXP *mk_var_exp(SYM *var)
+{
+	if(var==NULL)
+	{
+		error("null variable in expression");
+		return mk_exp(NULL, NULL, NULL);
+	}
+	if(var->type!=SYM_VAR)
+	{
+		return mk_exp(NULL, var, NULL);
+	}
+	if(var->scope==0 && (var->data_type==TYPE_INT || var->data_type==TYPE_CHAR) && var->is_const)
+	{
+		SYM *const_sym = (var->data_type==TYPE_CHAR) ? mk_char_const(var->const_value) : mk_const(var->const_value);
+		return mk_exp(NULL, const_sym, NULL);
+	}
+	return mk_exp(NULL, var, NULL);
 }
 
 SYM *mk_text(char *text)

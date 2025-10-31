@@ -63,6 +63,8 @@ typedef struct sym
 	int label;
 	void *address;
 	void *etc;
+	int is_const;
+	int const_value;
 	struct sym *next;
 } SYM;
 
@@ -187,6 +189,7 @@ SYM *mk_char_const(int n);
 SYM *mk_text(char *text);
 TAC *mk_tac(int op, SYM *a, SYM *b, SYM *c);
 EXP *mk_exp(EXP *next, SYM *ret, TAC *code);
+EXP *mk_var_exp(SYM *var);
 char *mk_lstr(int i);
 SYM *get_var(char *name);
 SYM *declare_func(char *name);
