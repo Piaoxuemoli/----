@@ -23,6 +23,12 @@ static int sym_size_bytes(SYM *sym)
 		if(info==NULL) return 4;
 		return info->length * info->elem_size;
 	}
+	if(sym->data_type==TYPE_STRUCT)
+	{
+		STRUCT_TYPE *stype=(STRUCT_TYPE *)sym->etc;
+		if(stype==NULL) return 4;
+		return stype->size;
+	}
 	return 4;
 }
 

@@ -56,32 +56,33 @@ extern int yydebug;
     YYUNDEF = 257,                 /* "invalid token"  */
     INT = 258,                     /* INT  */
     CHAR = 259,                    /* CHAR  */
-    EQ = 260,                      /* EQ  */
-    NE = 261,                      /* NE  */
-    LT = 262,                      /* LT  */
-    LE = 263,                      /* LE  */
-    GT = 264,                      /* GT  */
-    GE = 265,                      /* GE  */
-    UMINUS = 266,                  /* UMINUS  */
-    IF = 267,                      /* IF  */
-    ELSE = 268,                    /* ELSE  */
-    WHILE = 269,                   /* WHILE  */
-    FOR = 270,                     /* FOR  */
-    SWITCH = 271,                  /* SWITCH  */
-    CASE = 272,                    /* CASE  */
-    DEFAULT = 273,                 /* DEFAULT  */
-    BREAK = 274,                   /* BREAK  */
-    CONTINUE = 275,                /* CONTINUE  */
-    FUNC = 276,                    /* FUNC  */
-    INPUT = 277,                   /* INPUT  */
-    OUTPUT = 278,                  /* OUTPUT  */
-    RETURN = 279,                  /* RETURN  */
-    INTEGER = 280,                 /* INTEGER  */
-    IDENTIFIER = 281,              /* IDENTIFIER  */
-    TEXT = 282,                    /* TEXT  */
-    CHARACTER = 283,               /* CHARACTER  */
-    DEREF = 284,                   /* DEREF  */
-    ADDROF = 285                   /* ADDROF  */
+    STRUCT = 260,                  /* STRUCT  */
+    EQ = 261,                      /* EQ  */
+    NE = 262,                      /* NE  */
+    LT = 263,                      /* LT  */
+    LE = 264,                      /* LE  */
+    GT = 265,                      /* GT  */
+    GE = 266,                      /* GE  */
+    UMINUS = 267,                  /* UMINUS  */
+    IF = 268,                      /* IF  */
+    ELSE = 269,                    /* ELSE  */
+    WHILE = 270,                   /* WHILE  */
+    FOR = 271,                     /* FOR  */
+    SWITCH = 272,                  /* SWITCH  */
+    CASE = 273,                    /* CASE  */
+    DEFAULT = 274,                 /* DEFAULT  */
+    BREAK = 275,                   /* BREAK  */
+    CONTINUE = 276,                /* CONTINUE  */
+    FUNC = 277,                    /* FUNC  */
+    INPUT = 278,                   /* INPUT  */
+    OUTPUT = 279,                  /* OUTPUT  */
+    RETURN = 280,                  /* RETURN  */
+    INTEGER = 281,                 /* INTEGER  */
+    IDENTIFIER = 282,              /* IDENTIFIER  */
+    TEXT = 283,                    /* TEXT  */
+    CHARACTER = 284,               /* CHARACTER  */
+    DEREF = 285,                   /* DEREF  */
+    ADDROF = 286                   /* ADDROF  */
   };
   typedef enum yytokentype yytoken_kind_t;
 #endif
@@ -92,38 +93,39 @@ extern int yydebug;
 #define YYUNDEF 257
 #define INT 258
 #define CHAR 259
-#define EQ 260
-#define NE 261
-#define LT 262
-#define LE 263
-#define GT 264
-#define GE 265
-#define UMINUS 266
-#define IF 267
-#define ELSE 268
-#define WHILE 269
-#define FOR 270
-#define SWITCH 271
-#define CASE 272
-#define DEFAULT 273
-#define BREAK 274
-#define CONTINUE 275
-#define FUNC 276
-#define INPUT 277
-#define OUTPUT 278
-#define RETURN 279
-#define INTEGER 280
-#define IDENTIFIER 281
-#define TEXT 282
-#define CHARACTER 283
-#define DEREF 284
-#define ADDROF 285
+#define STRUCT 260
+#define EQ 261
+#define NE 262
+#define LT 263
+#define LE 264
+#define GT 265
+#define GE 266
+#define UMINUS 267
+#define IF 268
+#define ELSE 269
+#define WHILE 270
+#define FOR 271
+#define SWITCH 272
+#define CASE 273
+#define DEFAULT 274
+#define BREAK 275
+#define CONTINUE 276
+#define FUNC 277
+#define INPUT 278
+#define OUTPUT 279
+#define RETURN 280
+#define INTEGER 281
+#define IDENTIFIER 282
+#define TEXT 283
+#define CHARACTER 284
+#define DEREF 285
+#define ADDROF 286
 
 /* Value type.  */
 #if ! defined YYSTYPE && ! defined YYSTYPE_IS_DECLARED
 union YYSTYPE
 {
-#line 15 "mini.y"
+#line 17 "mini.y"
 
 	char character;
 	char *string;
@@ -135,8 +137,10 @@ union YYSTYPE
 	SYM *sym;
 	TAC *tac;
 	EXP	*exp;
+	STRUCT_FIELD *struct_field;
+	STRUCT_TYPE *struct_type;
 
-#line 140 "mini.y.h"
+#line 144 "mini.y.h"
 
 };
 typedef union YYSTYPE YYSTYPE;

@@ -9,6 +9,9 @@
 int scope, next_tmp, next_label;
 SYM *sym_tab_global, *sym_tab_local;
 TAC *tac_first, *tac_last;
+STRUCT_TYPE *current_struct_decl=NULL;
+
+static STRUCT_TYPE *struct_types=NULL;
 
 typedef struct loop_ctx
 {
@@ -131,6 +134,98 @@ int type_size(int data_type)
 	}
 }
 
+STRUCT_FIELD *struct_field_create(char *name, int type)
+{
+	STRUCT_FIELD *field=(STRUCT_FIELD *)malloc(sizeof(STRUCT_FIELD));
+	field->name=name;
+	field->type=type;
+	field->offset=0;
+	field->size=type_size(type);
+	field->next=NULL;
+	return field;
+}
+
+STRUCT_FIELD *struct_field_list_append(STRUCT_FIELD *list, STRUCT_FIELD *field)
+{
+	if(list==NULL) return field;
+	STRUCT_FIELD *iter=list;
+	while(iter->next!=NULL) iter=iter->next;
+	iter->next=field;
+	return list;
+}
+
+STRUCT_FIELD *struct_field_lookup(STRUCT_TYPE *type, char *name)
+{
+	if(type==NULL) return NULL;
+	for(STRUCT_FIELD *iter=type->fields; iter!=NULL; iter=iter->next)
+	{
+		if(strcmp(iter->name, name)==0)
+		{
+			return iter;
+		}
+	}
+	return NULL;
+}
+
+static void struct_validate_fields(STRUCT_FIELD *fields)
+{
+	for(STRUCT_FIELD *a=fields; a!=NULL; a=a->next)
+	{
+		if(!(a->type==TYPE_INT || a->type==TYPE_CHAR))
+		{
+			error("unsupported field type in struct");
+		}
+		for(STRUCT_FIELD *b=a->next; b!=NULL; b=b->next)
+		{
+			if(strcmp(a->name, b->name)==0)
+			{
+				error("duplicate field name in struct");
+			}
+		}
+	}
+}
+
+STRUCT_TYPE *struct_lookup(char *name)
+{
+	for(STRUCT_TYPE *iter=struct_types; iter!=NULL; iter=iter->next)
+	{
+		if(strcmp(iter->name, name)==0)
+		{
+			return iter;
+		}
+	}
+	return NULL;
+}
+
+STRUCT_TYPE *struct_define(char *name, STRUCT_FIELD *fields)
+{
+	if(fields==NULL)
+	{
+		error("struct must have at least one field");
+	}
+	if(struct_lookup(name)!=NULL)
+	{
+		error("struct already defined");
+		return struct_lookup(name);
+	}
+	struct_validate_fields(fields);
+	STRUCT_TYPE *stype=(STRUCT_TYPE *)malloc(sizeof(STRUCT_TYPE));
+	stype->name=name;
+	stype->fields=fields;
+	stype->size=0;
+	int offset=0;
+	for(STRUCT_FIELD *iter=fields; iter!=NULL; iter=iter->next)
+	{
+		iter->offset=offset;
+		iter->size=type_size(iter->type);
+		offset += iter->size;
+	}
+	stype->size=offset;
+	stype->next=struct_types;
+	struct_types=stype;
+	return stype;
+}
+
 void tac_init()
 {
 	scope=0;
@@ -138,6 +233,7 @@ void tac_init()
 	sym_tab_local=NULL;	
 	next_tmp=0;
 	next_label=1;
+ 	current_struct_decl=NULL;
 }
 
 void tac_complete()
@@ -205,6 +301,14 @@ SYM *mk_var(char *name, int data_type)
 	sym->name=name;
 	sym->offset=-1; /* Unset address */
 	sym->data_type=data_type;
+	if(data_type==TYPE_STRUCT)
+	{
+		if(current_struct_decl==NULL)
+		{
+			error("struct type not specified");
+		}
+		sym->etc=current_struct_decl;
+	}
 
 	if(scope)
 		insert_sym(&sym_tab_local,sym);
@@ -433,6 +537,10 @@ EXP *do_addr(SYM *var)
 	{
 		base_type=array_base_type(var->data_type);
 	}
+	else if(var->data_type==TYPE_STRUCT)
+	{
+		base_type=TYPE_CHAR;
+	}
 	else if(var->data_type==TYPE_INT || var->data_type==TYPE_CHAR)
 	{
 		base_type=var->data_type;
@@ -533,6 +641,42 @@ EXP *do_array_element(SYM *array, EXP *index)
 
 	free(base_exp);
 	return mk_exp(NULL, addr_tmp, add);
+}
+
+EXP *do_struct_field(SYM *structure, char *field_name)
+{
+	if(structure==NULL)
+	{
+		error("field access on null symbol");
+		return mk_exp(NULL, NULL, NULL);
+	}
+	if(structure->type!=SYM_VAR || structure->data_type!=TYPE_STRUCT)
+	{
+		error("field access on non-struct");
+		return mk_exp(NULL, NULL, NULL);
+	}
+	STRUCT_TYPE *stype=(STRUCT_TYPE *)structure->etc;
+	if(stype==NULL)
+	{
+		error("struct metadata missing");
+		return mk_exp(NULL, NULL, NULL);
+	}
+	STRUCT_FIELD *field=struct_field_lookup(stype, field_name);
+	if(field==NULL)
+	{
+		error("unknown field in struct");
+		return mk_exp(NULL, NULL, NULL);
+	}
+	EXP *base=do_addr(structure);
+	SYM *addr_tmp=mk_tmp_type(pointer_type_from_base(field->type));
+	TAC *decl=mk_tac(TAC_VAR, addr_tmp, NULL, NULL);
+	TAC *code=join_tac(base->tac, decl);
+	SYM *offset_sym=mk_const(field->offset);
+	TAC *add=mk_tac(TAC_ADD, addr_tmp, base->ret, offset_sym);
+	add->prev=code;
+	base->ret=addr_tmp;
+	base->tac=add;
+	return base;
 }
 
 TAC *do_break_stmt(void)

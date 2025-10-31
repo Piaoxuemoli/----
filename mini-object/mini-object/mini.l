@@ -29,6 +29,8 @@ static int parse_char_literal(const char *text)
 
 "char" {  return CHAR; }
 
+"struct" { return STRUCT; }
+
 "input"  {  return INPUT;  }
 
 "output"  {  return OUTPUT;  }

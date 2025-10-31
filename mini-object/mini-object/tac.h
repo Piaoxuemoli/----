@@ -5,6 +5,7 @@
 #define TYPE_PTR_CHAR 3
 #define TYPE_ARRAY_INT 4
 #define TYPE_ARRAY_CHAR 5
+#define TYPE_STRUCT 6
 
 /* type of symbol */
 #define SYM_UNDEF 0
@@ -13,6 +14,7 @@
 #define SYM_TEXT 3
 #define SYM_INT 4
 #define SYM_LABEL 5
+#define SYM_STRUCT 6
 
 /* type of tac */ 
 #define TAC_UNDEF 0 /* undefine */
@@ -105,6 +107,23 @@ typedef struct default_block
 	TAC *code;
 } DEFAULT_BLOCK;
 
+typedef struct struct_field
+{
+	char *name;
+	int type;
+	int offset;
+	int size;
+	struct struct_field *next;
+} STRUCT_FIELD;
+
+typedef struct struct_type
+{
+	char *name;
+	STRUCT_FIELD *fields;
+	int size;
+	struct struct_type *next;
+} STRUCT_TYPE;
+
 typedef struct exp
 {
 	struct exp *next; /* for argument list */
@@ -127,6 +146,11 @@ int pointer_base_type(int pointer_type);
 int is_array_type(int data_type);
 int array_base_type(int array_type);
 int type_size(int data_type);
+STRUCT_TYPE *struct_lookup(char *name);
+STRUCT_TYPE *struct_define(char *name, STRUCT_FIELD *fields);
+STRUCT_FIELD *struct_field_create(char *name, int type);
+STRUCT_FIELD *struct_field_list_append(STRUCT_FIELD *list, STRUCT_FIELD *field);
+STRUCT_FIELD *struct_field_lookup(STRUCT_TYPE *type, char *name);
 
 /* global var */
 extern FILE *file_x, *file_s;
@@ -173,6 +197,7 @@ EXP *do_addr(SYM *var);
 EXP *do_deref(EXP *ptr);
 TAC *do_store(EXP *ptr, EXP *value);
 EXP *do_array_element(SYM *array, EXP *index);
+EXP *do_struct_field(SYM *structure, char *field_name);
 TAC *do_break_stmt(void);
 TAC *do_continue_stmt(void);
 void error(const char *format, ...);
@@ -180,3 +205,5 @@ void loop_push(SYM *continue_label, SYM *break_label);
 void loop_pop(void);
 SYM *loop_current_continue(void);
 SYM *loop_current_break(void);
+
+extern STRUCT_TYPE *current_struct_decl;

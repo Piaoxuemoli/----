@@ -9,6 +9,8 @@ void yyerror(char* msg);
 
 int current_decl_type = TYPE_INT;
 
+extern STRUCT_TYPE *current_struct_decl;
+
 %}
 
 %union
@@ -23,9 +25,11 @@ int current_decl_type = TYPE_INT;
 	SYM *sym;
 	TAC *tac;
 	EXP	*exp;
+	STRUCT_FIELD *struct_field;
+	STRUCT_TYPE *struct_type;
 }
 
-%token INT CHAR EQ NE LT LE GT GE UMINUS IF ELSE WHILE FOR SWITCH CASE DEFAULT BREAK CONTINUE FUNC INPUT OUTPUT RETURN
+%token INT CHAR STRUCT EQ NE LT LE GT GE UMINUS IF ELSE WHILE FOR SWITCH CASE DEFAULT BREAK CONTINUE FUNC INPUT OUTPUT RETURN
 %token <string> INTEGER IDENTIFIER TEXT
 %token <character> CHARACTER
 
@@ -34,14 +38,16 @@ int current_decl_type = TYPE_INT;
 %left '*' '/'
 %right UMINUS DEREF ADDROF
 
-%type <tac> program function_declaration_list function_declaration function parameter_list variable_list declarator statement assignment_statement return_statement if_statement while_statement for_statement switch_statement break_statement continue_statement call_statement block declaration_list declaration statement_list input_statement output_statement for_init for_post case_statement_list
-%type <exp> argument_list expression_list expression call_expression expression_opt pointer_lvalue array_reference
+%type <tac> program function_declaration_list function_declaration function parameter_list variable_list declarator statement assignment_statement return_statement if_statement while_statement for_statement switch_statement break_statement continue_statement call_statement block declaration_list declaration statement_list input_statement output_statement for_init for_post case_statement_list struct_declaration_tail
+%type <exp> argument_list expression_list expression call_expression expression_opt pointer_lvalue array_reference struct_reference
 %type <sym> function_head case_value
 %type <loop> switch_header
 %type <cases> case_clause
 %type <switch_body> switch_sections
 %type <def_block> default_clause
 %type <number> type_specifier
+%type <struct_field> struct_field_list struct_field_decl
+%type <struct_type> struct_definition
 
 %%
 
@@ -66,6 +72,12 @@ function_declaration : function
 declaration : type_specifier variable_list ';'
 {
 	$$=$2;
+	current_struct_decl=NULL;
+}
+| struct_definition struct_declaration_tail ';'
+{
+	$$=$2;
+	current_struct_decl=NULL;
 }
 ;
 
@@ -82,11 +94,27 @@ declarator : IDENTIFIER
 }
 | IDENTIFIER '[' INTEGER ']'
 {
-	$$=declare_array($1, current_decl_type, atoi($3));
+	if(current_decl_type==TYPE_STRUCT)
+	{
+		error("arrays of struct not supported");
+		$$=NULL;
+	}
+	else
+	{
+		$$=declare_array($1, current_decl_type, atoi($3));
+	}
 }
 | '*' IDENTIFIER
 {
-	$$=declare_var($2, pointer_type_from_base(current_decl_type));
+	if(current_decl_type==TYPE_STRUCT)
+	{
+		error("pointers to struct not supported");
+		$$=NULL;
+	}
+	else
+	{
+		$$=declare_var($2, pointer_type_from_base(current_decl_type));
+	}
 }
 ;
 
@@ -114,12 +142,64 @@ function_head : IDENTIFIER
 type_specifier : INT
 {
 	current_decl_type = TYPE_INT;
+	current_struct_decl = NULL;
 	$$ = TYPE_INT;
 }
 | CHAR
 {
 	current_decl_type = TYPE_CHAR;
+	current_struct_decl = NULL;
 	$$ = TYPE_CHAR;
+}
+| STRUCT IDENTIFIER
+{
+	STRUCT_TYPE *stype=struct_lookup($2);
+	if(stype==NULL)
+	{
+		error("unknown struct type");
+	}
+	current_struct_decl = stype;
+	current_decl_type = TYPE_STRUCT;
+	$$ = TYPE_STRUCT;
+}
+;
+
+struct_definition : STRUCT IDENTIFIER '{' struct_field_list '}'
+{
+	STRUCT_TYPE *stype=struct_define($2, $4);
+	current_struct_decl = stype;
+	current_decl_type = TYPE_STRUCT;
+	$$=stype;
+}
+;
+
+struct_field_list : struct_field_list struct_field_decl
+{
+	$$=struct_field_list_append($1, $2);
+}
+| struct_field_decl
+{
+	$$=$1;
+}
+;
+
+struct_field_decl : INT IDENTIFIER ';'
+{
+	$$=struct_field_create($2, TYPE_INT);
+}
+| CHAR IDENTIFIER ';'
+{
+	$$=struct_field_create($2, TYPE_CHAR);
+}
+;
+
+struct_declaration_tail : variable_list
+{
+	$$=$1;
+}
+|
+{
+	$$=NULL;
 }
 ;
 
@@ -262,6 +342,10 @@ expression : expression '+' expression
 	$$=$1;
 }               
 | array_reference
+{
+	$$=do_deref($1);
+}
+| struct_reference
 {
 	$$=do_deref($1);
 }
@@ -414,6 +498,16 @@ pointer_lvalue : '*' IDENTIFIER
 | array_reference
 {
 	$$=$1;
+}
+| struct_reference
+{
+	$$=$1;
+}
+;
+
+struct_reference : IDENTIFIER '.' IDENTIFIER
+{
+	$$=do_struct_field(get_var($1), $3);
 }
 ;
 
