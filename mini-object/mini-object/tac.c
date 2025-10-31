@@ -827,6 +827,15 @@ TAC *do_assign(SYM *var, EXP *exp)
 
 	if(var->type !=SYM_VAR) error("assignment to non-variable");
 	cse_kill_sym(var);
+	if(exp->tac==NULL && exp->ret!=NULL && exp->ret->type==SYM_VAR)
+	{
+		SYM *src=exp->ret;
+		if(src->type==SYM_VAR && (src->data_type==TYPE_INT || src->data_type==TYPE_CHAR) && src->scope==0 && src->is_const)
+		{
+			SYM *const_sym = (src->data_type==TYPE_CHAR) ? mk_char_const(src->const_value) : mk_const(src->const_value);
+			exp->ret=const_sym;
+		}
+	}
 
 	code=mk_tac(TAC_COPY, var, exp->ret, NULL);
 	code->prev=exp->tac;

@@ -391,7 +391,7 @@ expression : expression '+' expression
 }
 | IDENTIFIER
 {
-	$$=mk_var_exp(get_var($1));
+	$$=mk_exp(NULL, get_var($1), NULL);
 }
 | call_expression
 {
