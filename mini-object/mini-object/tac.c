@@ -837,8 +837,33 @@ TAC *do_assign(SYM *var, EXP *exp)
 		}
 	}
 
-	code=mk_tac(TAC_COPY, var, exp->ret, NULL);
-	code->prev=exp->tac;
+	code=NULL;
+	if(exp->tac!=NULL && exp->ret!=NULL)
+	{
+		SYM *tmp=exp->ret;
+		int is_temp=0;
+		if(tmp->name!=NULL && tmp->name[0]=='t')
+		{
+			is_temp=1;
+		}
+		if(is_temp)
+		{
+			TAC *tail=exp->tac;
+			TAC *decl=tail->prev;
+			if(decl!=NULL && decl->op==TAC_VAR && decl->a==tmp)
+			{
+				tail->a=var;
+				exp->ret=var;
+				tail->prev=decl->prev;
+				code=tail;
+			}
+		}
+	}
+	if(code==NULL)
+	{
+		code=mk_tac(TAC_COPY, var, exp->ret, NULL);
+		code->prev=exp->tac;
+	}
 	const_record_assignment(var, exp);
 
 	return code;
