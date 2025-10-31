@@ -13,6 +13,81 @@ STRUCT_TYPE *current_struct_decl=NULL;
 
 static STRUCT_TYPE *struct_types=NULL;
 
+typedef struct cse_entry
+{
+	int op;
+	SYM *lhs;
+	SYM *rhs;
+	SYM *result;
+	struct cse_entry *next;
+} CSE_ENTRY;
+
+static CSE_ENTRY *cse_entries=NULL;
+
+static int cse_is_commutative(int op)
+{
+	return op==TAC_ADD || op==TAC_MUL;
+}
+
+static SYM *cse_lookup(int op, SYM *lhs, SYM *rhs)
+{
+	if(lhs==NULL || rhs==NULL) return NULL;
+	for(CSE_ENTRY *iter=cse_entries; iter!=NULL; iter=iter->next)
+	{
+		if(iter->op!=op) continue;
+		if(iter->lhs==lhs && iter->rhs==rhs)
+		{
+			return iter->result;
+		}
+		if(cse_is_commutative(op) && iter->lhs==rhs && iter->rhs==lhs)
+		{
+			return iter->result;
+		}
+	}
+	return NULL;
+}
+
+static void cse_insert(int op, SYM *lhs, SYM *rhs, SYM *result)
+{
+	if(lhs==NULL || rhs==NULL || result==NULL) return;
+	CSE_ENTRY *entry=(CSE_ENTRY *)malloc(sizeof(CSE_ENTRY));
+	entry->op=op;
+	entry->lhs=lhs;
+	entry->rhs=rhs;
+	entry->result=result;
+	entry->next=cse_entries;
+	cse_entries=entry;
+}
+
+static void cse_kill_sym(SYM *sym)
+{
+	if(sym==NULL) return;
+	CSE_ENTRY **pp=&cse_entries;
+	while(*pp!=NULL)
+	{
+		CSE_ENTRY *node=*pp;
+		if(node->lhs==sym || node->rhs==sym || node->result==sym)
+		{
+			*pp=node->next;
+			free(node);
+		}
+		else
+		{
+			pp=&node->next;
+		}
+	}
+}
+
+static void cse_clear(void)
+{
+	while(cse_entries!=NULL)
+	{
+		CSE_ENTRY *node=cse_entries;
+		cse_entries=node->next;
+		free(node);
+	}
+}
+
 typedef struct loop_ctx
 {
 	SYM *continue_label;
@@ -142,6 +217,16 @@ int type_size(int data_type)
 		default:
 		return 4;
 	}
+}
+
+static int sym_is_numeric_const(SYM *sym)
+{
+	return sym!=NULL && sym->type==SYM_INT;
+}
+
+static int sym_const_value(SYM *sym)
+{
+	return sym->value;
 }
 
 STRUCT_FIELD *struct_field_create(char *name, int base_type, int length, STRUCT_TYPE *elem_struct)
@@ -282,6 +367,7 @@ void tac_init()
 	next_tmp=0;
 	next_label=1;
  	current_struct_decl=NULL;
+	cse_clear();
 }
 
 void tac_complete()
@@ -495,6 +581,7 @@ TAC *do_func(SYM *func, TAC *args, TAC *code)
 	TAC *tlab; /* Label at start of function */
 	TAC *tbegin; /* BEGINFUNC marker */
 	TAC *tend; /* ENDFUNC marker */
+	cse_clear();
 
 	tlab=mk_tac(TAC_LABEL, mk_label(func->name), NULL, NULL);
 	tbegin=mk_tac(TAC_BEGINFUNC, NULL, NULL, NULL);
@@ -566,6 +653,7 @@ TAC *do_assign(SYM *var, EXP *exp)
 	TAC *code;
 
 	if(var->type !=SYM_VAR) error("assignment to non-variable");
+	cse_kill_sym(var);
 
 	code=mk_tac(TAC_COPY, var, exp->ret, NULL);
 	code->prev=exp->tac;
@@ -578,6 +666,7 @@ TAC *do_input(SYM *var)
 	TAC *code;
 
 	if(var->type !=SYM_VAR) error("input to non-variable");
+	cse_kill_sym(var);
 
 	code=mk_tac(TAC_INPUT, var, NULL, NULL);
 
@@ -667,6 +756,7 @@ TAC *do_store(EXP *ptr, EXP *value)
 		error("store through non-pointer");
 		return NULL;
 	}
+	cse_clear();
 	TAC *code=join_tac(ptr->tac, value->tac);
 	TAC *store=mk_tac(TAC_STORE, ptr->ret, value->ret, NULL);
 	store->prev=code;
@@ -702,6 +792,7 @@ EXP *do_array_element(SYM *array, EXP *index)
 	EXP *base_exp=NULL;
 	SYM *base_sym=NULL;
 	TAC *base_tac=NULL;
+	int stride_const=-1;
 	if(is_array_type(array->data_type))
 	{
 		info=(ARRAY_INFO *)array->etc;
@@ -716,6 +807,7 @@ EXP *do_array_element(SYM *array, EXP *index)
 		base_exp=do_addr(array);
 		base_sym=base_exp->ret;
 		base_tac=base_exp->tac;
+		stride_const=elem_size;
 	}
 	else if(is_pointer_type(array->data_type))
 	{
@@ -727,6 +819,7 @@ EXP *do_array_element(SYM *array, EXP *index)
 		}
 		base_sym=array;
 		base_tac=NULL;
+		stride_const=elem_size;
 	}
 	else
 	{
@@ -737,9 +830,26 @@ EXP *do_array_element(SYM *array, EXP *index)
 	SYM *scaled_tmp=mk_tmp();
 	TAC *decl=mk_tac(TAC_VAR, scaled_tmp, NULL, NULL);
 	decl->prev=index->tac;
-	SYM *elem_size_sym=mk_const(elem_size);
-	TAC *mul=mk_tac(TAC_MUL, scaled_tmp, index->ret, elem_size_sym);
-	mul->prev=decl;
+	TAC *mul=NULL;
+	if(sym_is_numeric_const(index->ret) && index->tac==NULL)
+	{
+		int folded=stride_const * sym_const_value(index->ret);
+		TAC *assign=mk_tac(TAC_COPY, scaled_tmp, mk_const(folded), NULL);
+		assign->prev=decl;
+		mul=assign;
+	}
+	else if(stride_const==1)
+	{
+		TAC *assign=mk_tac(TAC_COPY, scaled_tmp, index->ret, NULL);
+		assign->prev=decl;
+		mul=assign;
+	}
+	else
+	{
+		SYM *elem_size_sym=mk_const(elem_size);
+		mul=mk_tac(TAC_MUL, scaled_tmp, index->ret, elem_size_sym);
+		mul->prev=decl;
+	}
 
 	TAC *merged=join_tac(mul, base_tac);
 
@@ -918,6 +1028,84 @@ EXP *do_bin( int binop, EXP *exp1, EXP *exp2)
 	TAC *temp; /* TAC code for temp symbol */
 	TAC *ret; /* TAC code for result */
 
+	if(exp1==NULL || exp2==NULL)
+	{
+		error("binary op on invalid expression");
+		return mk_exp(NULL, NULL, NULL);
+	}
+
+	if(binop==TAC_ADD)
+	{
+		if(sym_is_numeric_const(exp1->ret) && exp1->tac==NULL && sym_const_value(exp1->ret)==0)
+		{
+			free(exp1);
+			return exp2;
+		}
+		if(sym_is_numeric_const(exp2->ret) && exp2->tac==NULL && sym_const_value(exp2->ret)==0)
+		{
+			free(exp2);
+			return exp1;
+		}
+	}
+	else if(binop==TAC_SUB)
+	{
+		if(sym_is_numeric_const(exp2->ret) && exp2->tac==NULL && sym_const_value(exp2->ret)==0)
+		{
+			free(exp2);
+			return exp1;
+		}
+	}
+
+	if(exp1->tac==NULL && exp2->tac==NULL)
+	{
+		SYM *cached=cse_lookup(binop, exp1->ret, exp2->ret);
+		if(cached!=NULL)
+		{
+			free(exp2);
+			exp1->ret=cached;
+			exp1->tac=NULL;
+			return exp1;
+		}
+	}
+
+	if(sym_is_numeric_const(exp1->ret) && sym_is_numeric_const(exp2->ret) && exp1->tac==NULL && exp2->tac==NULL)
+	{
+		long long v1=sym_const_value(exp1->ret);
+		long long v2=sym_const_value(exp2->ret);
+		long long folded=0;
+		int can_fold=0;
+		switch(binop)
+		{
+			case TAC_ADD:
+			folded=v1+v2;
+			can_fold=1;
+			break;
+			case TAC_SUB:
+			folded=v1-v2;
+			can_fold=1;
+			break;
+			case TAC_MUL:
+			folded=v1*v2;
+			can_fold=1;
+			break;
+			case TAC_DIV:
+			if(v2!=0)
+			{
+				folded=v1/v2;
+				can_fold=1;
+			}
+			break;
+		}
+		if(can_fold)
+		{
+			SYM *csym=mk_const((int)folded);
+			free(exp2);
+			exp1->ret=csym;
+			exp1->tac=NULL;
+			return exp1;
+		}
+	}
+
 	/*
 	if((exp1->ret->type==SYM_INT) && (exp2->ret->type==SYM_INT))
 	{
@@ -948,13 +1136,16 @@ EXP *do_bin( int binop, EXP *exp1, EXP *exp2)
 	}
 	*/
 
+	SYM *lhs=exp1->ret;
+	SYM *rhs=exp2->ret;
 	temp=mk_tac(TAC_VAR, mk_tmp(), NULL, NULL);
 	temp->prev=join_tac(exp1->tac, exp2->tac);
-	ret=mk_tac(binop, temp->a, exp1->ret, exp2->ret);
+	ret=mk_tac(binop, temp->a, lhs, rhs);
 	ret->prev=temp;
 
 	exp1->ret=temp->a;
 	exp1->tac=ret;
+	cse_insert(binop, lhs, rhs, temp->a);
 
 	return exp1;  
 }   
