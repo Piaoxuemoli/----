@@ -6,6 +6,7 @@
 #define TYPE_ARRAY_INT 4
 #define TYPE_ARRAY_CHAR 5
 #define TYPE_STRUCT 6
+#define TYPE_ARRAY_STRUCT 7
 
 /* type of symbol */
 #define SYM_UNDEF 0
@@ -107,12 +108,18 @@ typedef struct default_block
 	TAC *code;
 } DEFAULT_BLOCK;
 
+struct struct_type;
+
 typedef struct struct_field
 {
 	char *name;
 	int type;
 	int offset;
 	int size;
+	int array_length;
+	int elem_type;
+	int elem_size;
+	struct struct_type *elem_struct;
 	struct struct_field *next;
 } STRUCT_FIELD;
 
@@ -137,6 +144,7 @@ typedef struct array_info
 	int length;
 	int elem_type;
 	int elem_size;
+	STRUCT_TYPE *elem_struct;
 } ARRAY_INFO;
 
 /* pointer helpers */
@@ -148,7 +156,7 @@ int array_base_type(int array_type);
 int type_size(int data_type);
 STRUCT_TYPE *struct_lookup(char *name);
 STRUCT_TYPE *struct_define(char *name, STRUCT_FIELD *fields);
-STRUCT_FIELD *struct_field_create(char *name, int type);
+STRUCT_FIELD *struct_field_create(char *name, int base_type, int length, STRUCT_TYPE *elem_struct);
 STRUCT_FIELD *struct_field_list_append(STRUCT_FIELD *list, STRUCT_FIELD *field);
 STRUCT_FIELD *struct_field_lookup(STRUCT_TYPE *type, char *name);
 
@@ -197,7 +205,9 @@ EXP *do_addr(SYM *var);
 EXP *do_deref(EXP *ptr);
 TAC *do_store(EXP *ptr, EXP *value);
 EXP *do_array_element(SYM *array, EXP *index);
+EXP *do_array_element_from_exp(EXP *base_ptr, EXP *index);
 EXP *do_struct_field(SYM *structure, char *field_name);
+EXP *do_struct_field_from_exp(EXP *base_ptr, char *field_name);
 TAC *do_break_stmt(void);
 TAC *do_continue_stmt(void);
 void error(const char *format, ...);

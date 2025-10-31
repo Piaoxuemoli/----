@@ -81,6 +81,14 @@ int pointer_type_from_base(int base_type)
 		return TYPE_PTR_INT;
 		case TYPE_CHAR:
 		return TYPE_PTR_CHAR;
+		case TYPE_ARRAY_INT:
+		return TYPE_PTR_INT;
+		case TYPE_ARRAY_CHAR:
+		return TYPE_PTR_CHAR;
+		case TYPE_ARRAY_STRUCT:
+		return TYPE_PTR_CHAR;
+		case TYPE_STRUCT:
+		return TYPE_PTR_CHAR;
 		default:
 		error("unsupported base type for pointer");
 		return TYPE_PTR_INT;
@@ -103,7 +111,7 @@ int pointer_base_type(int pointer_type)
 
 int is_array_type(int data_type)
 {
-	return data_type==TYPE_ARRAY_INT || data_type==TYPE_ARRAY_CHAR;
+	return data_type==TYPE_ARRAY_INT || data_type==TYPE_ARRAY_CHAR || data_type==TYPE_ARRAY_STRUCT;
 }
 
 int array_base_type(int array_type)
@@ -114,6 +122,8 @@ int array_base_type(int array_type)
 		return TYPE_INT;
 		case TYPE_ARRAY_CHAR:
 		return TYPE_CHAR;
+		case TYPE_ARRAY_STRUCT:
+		return TYPE_STRUCT;
 		default:
 		error("subscript on non-array type");
 		return TYPE_INT;
@@ -134,13 +144,47 @@ int type_size(int data_type)
 	}
 }
 
-STRUCT_FIELD *struct_field_create(char *name, int type)
+STRUCT_FIELD *struct_field_create(char *name, int base_type, int length, STRUCT_TYPE *elem_struct)
 {
 	STRUCT_FIELD *field=(STRUCT_FIELD *)malloc(sizeof(STRUCT_FIELD));
 	field->name=name;
-	field->type=type;
+	field->array_length=length;
+	field->elem_type=base_type;
+	field->elem_struct=elem_struct;
+	if(base_type==TYPE_STRUCT)
+	{
+		if(elem_struct==NULL)
+		{
+			error("struct field missing type");
+			field->elem_size=0;
+		}
+		else
+		{
+			field->elem_size=elem_struct->size;
+		}
+	}
+	else
+	{
+		field->elem_size=type_size(base_type);
+	}
+	if(length>0)
+	{
+		if(base_type==TYPE_INT)
+			field->type=TYPE_ARRAY_INT;
+		else if(base_type==TYPE_CHAR)
+			field->type=TYPE_ARRAY_CHAR;
+		else if(base_type==TYPE_STRUCT)
+			field->type=TYPE_ARRAY_STRUCT;
+		else
+			field->type=base_type;
+		field->size=field->elem_size * length;
+	}
+	else
+	{
+		field->type=base_type;
+		field->size=field->elem_size;
+	}
 	field->offset=0;
-	field->size=type_size(type);
 	field->next=NULL;
 	return field;
 }
@@ -171,9 +215,14 @@ static void struct_validate_fields(STRUCT_FIELD *fields)
 {
 	for(STRUCT_FIELD *a=fields; a!=NULL; a=a->next)
 	{
-		if(!(a->type==TYPE_INT || a->type==TYPE_CHAR))
+		int base_type = (a->array_length>0) ? a->elem_type : a->type;
+		if(!(base_type==TYPE_INT || base_type==TYPE_CHAR || base_type==TYPE_STRUCT))
 		{
 			error("unsupported field type in struct");
+		}
+		if(base_type==TYPE_STRUCT && a->elem_struct==NULL)
+		{
+			error("struct field missing type");
 		}
 		for(STRUCT_FIELD *b=a->next; b!=NULL; b=b->next)
 		{
@@ -217,7 +266,6 @@ STRUCT_TYPE *struct_define(char *name, STRUCT_FIELD *fields)
 	for(STRUCT_FIELD *iter=fields; iter!=NULL; iter=iter->next)
 	{
 		iter->offset=offset;
-		iter->size=type_size(iter->type);
 		offset += iter->size;
 	}
 	stype->size=offset;
@@ -349,7 +397,17 @@ static SYM *mk_array(char *name, int base_type, int length)
 		length=1;
 	}
 
-	if(!(base_type==TYPE_INT || base_type==TYPE_CHAR))
+	STRUCT_TYPE *stype=NULL;
+	if(base_type==TYPE_STRUCT)
+	{
+		stype=current_struct_decl;
+		if(stype==NULL)
+		{
+			error("struct type not specified for array");
+			base_type=TYPE_INT;
+		}
+	}
+	else if(!(base_type==TYPE_INT || base_type==TYPE_CHAR))
 	{
 		error("unsupported array element type");
 		base_type=TYPE_INT;
@@ -370,11 +428,25 @@ static SYM *mk_array(char *name, int base_type, int length)
 	sym->type=SYM_VAR;
 	sym->name=name;
 	sym->offset=-1;
-	sym->data_type=(base_type==TYPE_INT) ? TYPE_ARRAY_INT : TYPE_ARRAY_CHAR;
+	if(base_type==TYPE_INT)
+		sym->data_type=TYPE_ARRAY_INT;
+	else if(base_type==TYPE_CHAR)
+		sym->data_type=TYPE_ARRAY_CHAR;
+	else
+		sym->data_type=TYPE_ARRAY_STRUCT;
 	ARRAY_INFO *info=(ARRAY_INFO *)malloc(sizeof(ARRAY_INFO));
 	info->length=length;
 	info->elem_type=base_type;
-	info->elem_size=type_size(base_type);
+	if(base_type==TYPE_STRUCT && stype!=NULL)
+	{
+		info->elem_size=stype->size;
+		info->elem_struct=stype;
+	}
+	else
+	{
+		info->elem_size=type_size(base_type);
+		info->elem_struct=NULL;
+	}
 	sym->etc=info;
 
 	if(scope)
@@ -388,6 +460,7 @@ static SYM *mk_array(char *name, int base_type, int length)
 TAC *declare_array(char *name, int base_type, int length)
 {
 	SYM *sym=mk_array(name, base_type, length);
+	if(sym==NULL) return NULL;
 	return mk_tac(TAC_VAR, sym, NULL, NULL);
 }
 
@@ -554,7 +627,9 @@ EXP *do_addr(SYM *var)
 	TAC *decl=mk_tac(TAC_VAR, tmp, NULL, NULL);
 	TAC *addr=mk_tac(TAC_ADDR, tmp, var, NULL);
 	addr->prev=decl;
-	return mk_exp(NULL, tmp, addr);
+	EXP *exp=mk_exp(NULL, tmp, addr);
+	exp->etc = (var->data_type==TYPE_STRUCT) ? var->etc : NULL;
+	return exp;
 }
 
 EXP *do_deref(EXP *ptr)
@@ -605,9 +680,14 @@ EXP *do_array_element(SYM *array, EXP *index)
 		error("subscript on null symbol");
 		return mk_exp(NULL, NULL, NULL);
 	}
-	if(array->type!=SYM_VAR || !is_array_type(array->data_type))
+	if(array->type!=SYM_VAR)
 	{
-		error("subscript on non-array");
+		error("subscript on non-variable symbol");
+		return mk_exp(NULL, NULL, NULL);
+	}
+	if(!is_array_type(array->data_type) && !is_pointer_type(array->data_type))
+	{
+		error("subscript on non-array type");
 		return mk_exp(NULL, NULL, NULL);
 	}
 	if(index==NULL || index->ret==NULL)
@@ -615,32 +695,169 @@ EXP *do_array_element(SYM *array, EXP *index)
 		error("array index is invalid");
 		return mk_exp(NULL, NULL, NULL);
 	}
-	ARRAY_INFO *info=(ARRAY_INFO *)array->etc;
-	if(info==NULL)
+	int elem_type;
+	int elem_size;
+	STRUCT_TYPE *elem_struct=NULL;
+	ARRAY_INFO *info=NULL;
+	EXP *base_exp=NULL;
+	SYM *base_sym=NULL;
+	TAC *base_tac=NULL;
+	if(is_array_type(array->data_type))
 	{
-		error("array metadata missing");
+		info=(ARRAY_INFO *)array->etc;
+		if(info==NULL)
+		{
+			error("array metadata missing");
+			return mk_exp(NULL, NULL, NULL);
+		}
+		elem_type=info->elem_type;
+		elem_size=info->elem_size;
+		elem_struct=info->elem_struct;
+		base_exp=do_addr(array);
+		base_sym=base_exp->ret;
+		base_tac=base_exp->tac;
+	}
+	else if(is_pointer_type(array->data_type))
+	{
+		elem_type=pointer_base_type(array->data_type);
+		elem_size=type_size(elem_type);
+		if(elem_type==TYPE_STRUCT)
+		{
+			elem_struct=(STRUCT_TYPE *)array->etc;
+		}
+		base_sym=array;
+		base_tac=NULL;
+	}
+	else
+	{
+		error("subscript on non-array type");
 		return mk_exp(NULL, NULL, NULL);
 	}
+
 	SYM *scaled_tmp=mk_tmp();
 	TAC *decl=mk_tac(TAC_VAR, scaled_tmp, NULL, NULL);
 	decl->prev=index->tac;
-	SYM *elem_size_sym=mk_const(info->elem_size);
+	SYM *elem_size_sym=mk_const(elem_size);
 	TAC *mul=mk_tac(TAC_MUL, scaled_tmp, index->ret, elem_size_sym);
 	mul->prev=decl;
 
-	EXP *base_exp=do_addr(array);
-	SYM *base_sym=base_exp->ret;
-	TAC *base_tac=base_exp->tac;
 	TAC *merged=join_tac(mul, base_tac);
 
-	SYM *addr_tmp=mk_tmp_type(pointer_type_from_base(info->elem_type));
+	int ptr_type = (elem_type==TYPE_STRUCT) ? TYPE_PTR_CHAR : pointer_type_from_base(elem_type);
+	SYM *addr_tmp=mk_tmp_type(ptr_type);
 	TAC *addr_decl=mk_tac(TAC_VAR, addr_tmp, NULL, NULL);
 	addr_decl->prev=merged;
-	TAC *add=mk_tac(TAC_ADD, addr_tmp, base_sym, scaled_tmp);
+	SYM *base_symbol=base_sym;
+	if(base_symbol==NULL)
+	{
+		error("array base computation failed");
+		if(base_exp!=NULL) free(base_exp);
+		return mk_exp(NULL, NULL, NULL);
+	}
+	TAC *add=mk_tac(TAC_ADD, addr_tmp, base_symbol, scaled_tmp);
 	add->prev=addr_decl;
 
-	free(base_exp);
-	return mk_exp(NULL, addr_tmp, add);
+	EXP *result=mk_exp(NULL, addr_tmp, add);
+	result->etc = (elem_type==TYPE_STRUCT) ? (void *)elem_struct : NULL;
+	if(base_exp!=NULL)
+	{
+		free(base_exp);
+	}
+	return result;
+}
+
+	EXP *do_array_element_from_exp(EXP *base_ptr, EXP *index)
+	{
+		if(base_ptr==NULL || base_ptr->ret==NULL)
+		{
+			error("array reference on invalid expression");
+			return mk_exp(NULL, NULL, NULL);
+		}
+		if(index==NULL || index->ret==NULL)
+		{
+			error("array index is invalid");
+			free(base_ptr);
+			return mk_exp(NULL, NULL, NULL);
+		}
+		ARRAY_INFO *info=(ARRAY_INFO *)base_ptr->etc;
+		if(info==NULL)
+		{
+			error("array metadata missing");
+			free(base_ptr);
+			return mk_exp(NULL, NULL, NULL);
+		}
+		SYM *scaled_tmp=mk_tmp();
+		TAC *decl=mk_tac(TAC_VAR, scaled_tmp, NULL, NULL);
+		decl->prev=index->tac;
+		SYM *elem_size_sym=mk_const(info->elem_size);
+		TAC *mul=mk_tac(TAC_MUL, scaled_tmp, index->ret, elem_size_sym);
+		mul->prev=decl;
+		TAC *merged=join_tac(mul, base_ptr->tac);
+		int ptr_type = (info->elem_type==TYPE_STRUCT) ? TYPE_PTR_CHAR : pointer_type_from_base(info->elem_type);
+		SYM *addr_tmp=mk_tmp_type(ptr_type);
+		TAC *addr_decl=mk_tac(TAC_VAR, addr_tmp, NULL, NULL);
+		addr_decl->prev=merged;
+		TAC *add=mk_tac(TAC_ADD, addr_tmp, base_ptr->ret, scaled_tmp);
+		add->prev=addr_decl;
+		EXP *result=mk_exp(NULL, addr_tmp, add);
+		result->etc = (info->elem_type==TYPE_STRUCT) ? (void *)info->elem_struct : NULL;
+		free(info);
+		free(base_ptr);
+		return result;
+	}
+static EXP *struct_field_from_address(EXP *addr_exp, STRUCT_TYPE *stype, char *field_name)
+{
+	if(stype==NULL)
+	{
+		error("struct metadata missing");
+		free(addr_exp);
+		return mk_exp(NULL, NULL, NULL);
+	}
+	STRUCT_FIELD *field=struct_field_lookup(stype, field_name);
+	if(field==NULL)
+	{
+		error("unknown field in struct");
+		free(addr_exp);
+		return mk_exp(NULL, NULL, NULL);
+	}
+	int ptr_type;
+	if(field->array_length>0)
+	{
+		ptr_type = pointer_type_from_base(field->elem_type);
+	}
+	else
+	{
+		ptr_type = pointer_type_from_base(field->type);
+	}
+	SYM *addr_tmp=mk_tmp_type(ptr_type);
+	TAC *decl=mk_tac(TAC_VAR, addr_tmp, NULL, NULL);
+	decl->prev=addr_exp->tac;
+	SYM *offset_sym=mk_const(field->offset);
+	TAC *add=mk_tac(TAC_ADD, addr_tmp, addr_exp->ret, offset_sym);
+	add->prev=decl;
+	EXP *result=mk_exp(NULL, addr_tmp, add);
+	if(field->array_length>0)
+	{
+		ARRAY_INFO *info=(ARRAY_INFO *)malloc(sizeof(ARRAY_INFO));
+		info->length=field->array_length;
+		info->elem_type=field->elem_type;
+		info->elem_size=field->elem_size;
+		info->elem_struct=field->elem_struct;
+		result->etc=info;
+	}
+	else
+	{
+		if(field->type==TYPE_STRUCT)
+		{
+			result->etc=field->elem_struct;
+		}
+		else
+		{
+			result->etc=NULL;
+		}
+	}
+	free(addr_exp);
+	return result;
 }
 
 EXP *do_struct_field(SYM *structure, char *field_name)
@@ -661,22 +878,25 @@ EXP *do_struct_field(SYM *structure, char *field_name)
 		error("struct metadata missing");
 		return mk_exp(NULL, NULL, NULL);
 	}
-	STRUCT_FIELD *field=struct_field_lookup(stype, field_name);
-	if(field==NULL)
+	EXP *base_addr=do_addr(structure);
+	return struct_field_from_address(base_addr, stype, field_name);
+}
+
+EXP *do_struct_field_from_exp(EXP *base_ptr, char *field_name)
+{
+	if(base_ptr==NULL)
 	{
-		error("unknown field in struct");
+		error("field access on invalid expression");
 		return mk_exp(NULL, NULL, NULL);
 	}
-	EXP *base=do_addr(structure);
-	SYM *addr_tmp=mk_tmp_type(pointer_type_from_base(field->type));
-	TAC *decl=mk_tac(TAC_VAR, addr_tmp, NULL, NULL);
-	TAC *code=join_tac(base->tac, decl);
-	SYM *offset_sym=mk_const(field->offset);
-	TAC *add=mk_tac(TAC_ADD, addr_tmp, base->ret, offset_sym);
-	add->prev=code;
-	base->ret=addr_tmp;
-	base->tac=add;
-	return base;
+	STRUCT_TYPE *stype=(STRUCT_TYPE *)base_ptr->etc;
+	if(stype==NULL)
+	{
+		error("field access requires struct pointer");
+		free(base_ptr);
+		return mk_exp(NULL, NULL, NULL);
+	}
+	return struct_field_from_address(base_ptr, stype, field_name);
 }
 
 TAC *do_break_stmt(void)

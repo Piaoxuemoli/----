@@ -84,7 +84,9 @@ declaration : type_specifier variable_list ';'
 variable_list : declarator
 | variable_list ',' declarator
 {
-	$$=join_tac($1, $3);
+	if($1==NULL) $$=$3;
+	else if($3==NULL) $$=$1;
+	else $$=join_tac($1, $3);
 }
 ;
 
@@ -94,15 +96,7 @@ declarator : IDENTIFIER
 }
 | IDENTIFIER '[' INTEGER ']'
 {
-	if(current_decl_type==TYPE_STRUCT)
-	{
-		error("arrays of struct not supported");
-		$$=NULL;
-	}
-	else
-	{
-		$$=declare_array($1, current_decl_type, atoi($3));
-	}
+	$$=declare_array($1, current_decl_type, atoi($3));
 }
 | '*' IDENTIFIER
 {
@@ -185,11 +179,45 @@ struct_field_list : struct_field_list struct_field_decl
 
 struct_field_decl : INT IDENTIFIER ';'
 {
-	$$=struct_field_create($2, TYPE_INT);
+	$$=struct_field_create($2, TYPE_INT, 0, NULL);
 }
 | CHAR IDENTIFIER ';'
 {
-	$$=struct_field_create($2, TYPE_CHAR);
+	$$=struct_field_create($2, TYPE_CHAR, 0, NULL);
+}
+| INT IDENTIFIER '[' INTEGER ']' ';'
+{
+	$$=struct_field_create($2, TYPE_INT, atoi($4), NULL);
+}
+| CHAR IDENTIFIER '[' INTEGER ']' ';'
+{
+	$$=struct_field_create($2, TYPE_CHAR, atoi($4), NULL);
+}
+| STRUCT IDENTIFIER IDENTIFIER ';'
+{
+	STRUCT_TYPE *stype=struct_lookup($2);
+	if(stype==NULL)
+	{
+		error("unknown struct type");
+		$$=NULL;
+	}
+	else
+	{
+		$$=struct_field_create($3, TYPE_STRUCT, 0, stype);
+	}
+}
+| STRUCT IDENTIFIER IDENTIFIER '[' INTEGER ']' ';'
+{
+	STRUCT_TYPE *stype=struct_lookup($2);
+	if(stype==NULL)
+	{
+		error("unknown struct type");
+		$$=NULL;
+	}
+	else
+	{
+		$$=struct_field_create($3, TYPE_STRUCT, atoi($5), stype);
+	}
 }
 ;
 
@@ -317,6 +345,14 @@ expression : expression '+' expression
 {
 	$$=$2;
 }               
+| '&' array_reference %prec ADDROF
+{
+	$$=$2;
+}
+| '&' struct_reference %prec ADDROF
+{
+	$$=$2;
+}
 | '&' IDENTIFIER %prec ADDROF
 {
 	$$=do_addr(get_var($2));
@@ -343,7 +379,16 @@ expression : expression '+' expression
 }               
 | array_reference
 {
-	$$=do_deref($1);
+	if($1->etc!=NULL)
+	{
+		error("struct element requires field selection");
+	free($1);
+	$$=mk_exp(NULL, NULL, NULL);
+	}
+	else
+	{
+		$$=do_deref($1);
+	}
 }
 | struct_reference
 {
@@ -489,6 +534,10 @@ array_reference : IDENTIFIER '[' expression ']'
 {
 	$$=do_array_element(get_var($1), $3);
 }
+| struct_reference '[' expression ']'
+{
+	$$=do_array_element_from_exp($1, $3);
+}
 ;
 
 pointer_lvalue : '*' IDENTIFIER
@@ -497,7 +546,16 @@ pointer_lvalue : '*' IDENTIFIER
 }
 | array_reference
 {
-	$$=$1;
+	if($1->etc!=NULL)
+	{
+		error("struct element requires field selection");
+	free($1);
+	$$=NULL;
+	}
+	else
+	{
+		$$=$1;
+	}
 }
 | struct_reference
 {
@@ -508,6 +566,14 @@ pointer_lvalue : '*' IDENTIFIER
 struct_reference : IDENTIFIER '.' IDENTIFIER
 {
 	$$=do_struct_field(get_var($1), $3);
+}
+| array_reference '.' IDENTIFIER
+{
+	$$=do_struct_field_from_exp($1, $3);
+}
+| struct_reference '.' IDENTIFIER
+{
+	$$=do_struct_field_from_exp($1, $3);
 }
 ;
 

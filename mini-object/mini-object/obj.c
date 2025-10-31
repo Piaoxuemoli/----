@@ -162,15 +162,42 @@ int reg_alloc(SYM *s)
 
 void asm_bin(char *op, SYM *a, SYM *b, SYM *c)
 {
-	int reg_b=-1, reg_c=-1; 
-
-	while(reg_b == reg_c)
+	int reg_b = reg_alloc(b);
+	int reg_c = reg_alloc(c);
+	if(reg_b == reg_c)
 	{
-		reg_b = reg_alloc(b); 
-		reg_c = reg_alloc(c); 
+		int alt=-1;
+		for(int r=R_GEN; r < R_NUM; r++)
+		{
+			if(r==reg_b) continue;
+			if(rdesc[r].var==NULL)
+			{
+				asm_load(r, c);
+				rdesc_fill(r, c, UNMODIFIED);
+				alt=r;
+				break;
+			}
+		}
+		if(alt==-1)
+		{
+			for(int r=R_GEN; r < R_NUM; r++)
+			{
+				if(r==reg_b) continue;
+				asm_write_back(r);
+				asm_load(r, c);
+				rdesc_fill(r, c, UNMODIFIED);
+				alt=r;
+				break;
+			}
+		}
+		if(alt==-1)
+		{
+			alt=reg_b;
+		}
+		reg_c=alt;
 	}
 	
-	out_str(file_s, "	%s R%u,R%u\n", op, reg_b, reg_c);
+	out_str(file_s, "\t%s R%u,R%u\n", op, reg_b, reg_c);
 	rdesc_fill(reg_b, a, MODIFIED);
 }   
 
