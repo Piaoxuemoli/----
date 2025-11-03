@@ -591,6 +591,11 @@ void asm_code(TAC *c)
 			int rv=reg_alloc(c->b);
 			rdesc[rp].mod=saved_mod;
 			out_str(file_s, "\tSTO (R%u+0),R%u\n", rp, rv);
+			for(int r=R_GEN; r < R_NUM; r++)
+			{
+				asm_write_back(r);
+				rdesc_clear(r);
+			}
 			return;
 		}
 

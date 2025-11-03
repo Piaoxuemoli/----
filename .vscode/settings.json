@@ -2,6 +2,11 @@
     "files.associations": {
         "*.dbclient-js": "javascript",
         "stdio.h": "c",
-        "stdlib.h": "c"
+        "stdlib.h": "c",
+        "tac.h": "c",
+        "string.h": "c",
+        "obj.h": "c",
+        "ctype.h": "c",
+        "stdarg.h": "c"
     }
 }
