@@ -2,10 +2,10 @@ main()
 {
     int i,j,k,l;
     char a,b,c,d;
-    input d;
+    d = 'd';
     c = 'c';
     b = 'b';
-    input a;
+    a = 'a';
 
     if(0) { output "\n"; }
 

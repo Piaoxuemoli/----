@@ -3,6 +3,7 @@
 #include <stdarg.h>
 #include <string.h>
 #include <ctype.h>
+#include <stdint.h>
 #include "tac.h"
 
 /* global var */
@@ -240,6 +241,9 @@ int pointer_type_from_base(int base_type)
 		return TYPE_PTR_CHAR;
 		case TYPE_STRUCT:
 		return TYPE_PTR_CHAR;
+		case TYPE_PTR_INT:
+		case TYPE_PTR_CHAR:
+		return TYPE_PTR_CHAR;
 		default:
 		error("unsupported base type for pointer");
 		return TYPE_PTR_INT;
@@ -392,6 +396,10 @@ STRUCT_FIELD *struct_field_create(char *name, int base_type, DIM_LIST *dims, STR
 	}
 	if(dims!=NULL)
 	{
+		if(base_type==TYPE_PTR_INT || base_type==TYPE_PTR_CHAR)
+		{
+			error("arrays of pointer fields not supported");
+		}
 		ARRAY_INFO *info=array_info_build(base_type, elem_struct, dims);
 		dim_list_free(dims);
 		field->array_info=info;
@@ -423,6 +431,11 @@ STRUCT_FIELD *struct_field_create(char *name, int base_type, DIM_LIST *dims, STR
 		}
 		else
 		{
+			if(base_type==TYPE_PTR_INT || base_type==TYPE_PTR_CHAR)
+			{
+				field->elem_type=pointer_base_type(base_type);
+				field->elem_struct=NULL;
+			}
 			field->elem_size=type_size(base_type);
 			field->size=field->elem_size;
 		}
@@ -459,7 +472,7 @@ static void struct_validate_fields(STRUCT_FIELD *fields)
 	for(STRUCT_FIELD *a=fields; a!=NULL; a=a->next)
 	{
 		int base_type = a->elem_type;
-		if(!(base_type==TYPE_INT || base_type==TYPE_CHAR || base_type==TYPE_STRUCT))
+		if(!(base_type==TYPE_INT || base_type==TYPE_CHAR || base_type==TYPE_STRUCT || base_type==TYPE_PTR_INT || base_type==TYPE_PTR_CHAR))
 		{
 			error("unsupported field type in struct");
 		}
@@ -915,12 +928,20 @@ EXP *do_addr(SYM *var)
 	{
 		base_type=var->data_type;
 	}
+	else if(var->data_type==TYPE_PTR_INT || var->data_type==TYPE_PTR_CHAR)
+	{
+		base_type=var->data_type;
+	}
 	else
 	{
 		error("address-of unsupported type");
 		return mk_exp(NULL, NULL, NULL);
 	}
 	SYM *tmp=mk_tmp_type(pointer_type_from_base(base_type));
+	if(base_type==TYPE_PTR_INT || base_type==TYPE_PTR_CHAR)
+	{
+		tmp->address=(void *)(intptr_t)base_type;
+	}
 	TAC *decl=mk_tac(TAC_VAR, tmp, NULL, NULL);
 	TAC *addr=mk_tac(TAC_ADDR, tmp, var, NULL);
 	addr->prev=decl;
@@ -942,7 +963,12 @@ EXP *do_deref(EXP *ptr)
 		error("dereference of non-pointer");
 		return mk_exp(NULL, NULL, NULL);
 	}
-	SYM *tmp=mk_tmp_type(pointer_base_type(pointer_sym->data_type));
+	int base_type = pointer_base_type(pointer_sym->data_type);
+	if(pointer_sym->data_type==TYPE_PTR_CHAR && pointer_sym->address!=NULL)
+	{
+		base_type=(int)(intptr_t)pointer_sym->address;
+	}
+	SYM *tmp=mk_tmp_type(base_type);
 	TAC *decl=mk_tac(TAC_VAR, tmp, NULL, NULL);
 	TAC *code=join_tac(ptr->tac, decl);
 	TAC *load=mk_tac(TAC_LOAD, tmp, pointer_sym, NULL);
@@ -1197,15 +1223,28 @@ static EXP *struct_field_from_address(EXP *addr_exp, STRUCT_TYPE *stype, char *f
 		return mk_exp(NULL, NULL, NULL);
 	}
 	int ptr_type;
+	int pointer_value_type=0;
 	if(field->array_info!=NULL)
 	{
 		ptr_type = pointer_type_from_base(field->elem_type);
 	}
 	else
 	{
-		ptr_type = pointer_type_from_base(field->type);
+		if(field->type==TYPE_PTR_INT || field->type==TYPE_PTR_CHAR)
+		{
+			ptr_type=TYPE_PTR_CHAR;
+			pointer_value_type=field->type;
+		}
+		else
+		{
+			ptr_type = pointer_type_from_base(field->type);
+		}
 	}
 	SYM *addr_tmp=mk_tmp_type(ptr_type);
+	if(pointer_value_type!=0)
+	{
+		addr_tmp->address=(void *)(intptr_t)pointer_value_type;
+	}
 	TAC *decl=mk_tac(TAC_VAR, addr_tmp, NULL, NULL);
 	decl->prev=addr_exp->tac;
 	SYM *offset_sym=mk_const(field->offset);

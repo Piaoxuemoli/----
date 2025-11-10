@@ -47,7 +47,7 @@ static DIM_LIST *dim_list_prepend(DIM_LIST *tail, int length)
 %left '*' '/'
 %right UMINUS DEREF ADDROF
 
-%type <tac> program function_declaration_list function_declaration function parameter_list variable_list declarator statement assignment_statement return_statement if_statement while_statement for_statement switch_statement break_statement continue_statement call_statement block declaration_list declaration statement_list input_statement output_statement for_init for_post case_statement_list struct_declaration_tail
+%type <tac> program function_declaration_list function_declaration function parameter_list parameter_sequence parameter declarator variable_list statement assignment_statement return_statement if_statement while_statement for_statement switch_statement break_statement continue_statement call_statement block declaration_list declaration statement_list input_statement output_statement for_init for_post case_statement_list struct_declaration_tail
 %type <exp> argument_list expression_list expression call_expression expression_opt pointer_lvalue array_reference struct_reference
 %type <sym> function_head case_value
 %type <loop> switch_header
@@ -137,6 +137,16 @@ function : function_head '(' parameter_list ')' block
 	$$=do_func($1, $3, $5);
 	scope=0; /* Leave local scope. */
 	sym_tab_local=NULL; /* Clear local symbol table. */
+	current_struct_decl=NULL;
+	current_decl_type=TYPE_INT;
+}
+| type_specifier function_head '(' parameter_list ')' block
+{
+	$$=do_func($2, $4, $6);
+	scope=0;
+	sym_tab_local=NULL;
+	current_struct_decl=NULL;
+	current_decl_type=TYPE_INT;
 }
 | error
 {
@@ -201,6 +211,10 @@ struct_field_decl : INT IDENTIFIER ';'
 {
 	$$=struct_field_create($2, TYPE_INT, NULL, NULL);
 }
+| INT '*' IDENTIFIER ';'
+{
+	$$=struct_field_create($3, TYPE_PTR_INT, NULL, NULL);
+}
 | INT IDENTIFIER array_dimensions ';'
 {
 	$$=struct_field_create($2, TYPE_INT, $3, NULL);
@@ -208,6 +222,10 @@ struct_field_decl : INT IDENTIFIER ';'
 | CHAR IDENTIFIER ';'
 {
 	$$=struct_field_create($2, TYPE_CHAR, NULL, NULL);
+}
+| CHAR '*' IDENTIFIER ';'
+{
+	$$=struct_field_create($3, TYPE_PTR_CHAR, NULL, NULL);
 }
 | CHAR IDENTIFIER array_dimensions ';'
 {
@@ -251,17 +269,55 @@ struct_declaration_tail : variable_list
 }
 ;
 
-parameter_list : IDENTIFIER
+parameter_list : parameter_sequence
 {
-	$$=declare_para($1, TYPE_INT);
-}               
-| parameter_list ',' IDENTIFIER
-{
-	$$=join_tac($1, declare_para($3, TYPE_INT));
-}               
+	$$=$1;
+}
 |
 {
 	$$=NULL;
+}
+;
+
+parameter_sequence : parameter
+{
+	$$=$1;
+}
+| parameter_sequence ',' parameter
+{
+	$$=join_tac($1, $3);
+}
+;
+
+parameter : IDENTIFIER
+{
+	$$=declare_para($1, TYPE_INT);
+}
+| INT IDENTIFIER
+{
+	$$=declare_para($2, TYPE_INT);
+}
+| CHAR IDENTIFIER
+{
+	$$=declare_para($2, TYPE_CHAR);
+}
+| STRUCT IDENTIFIER IDENTIFIER
+{
+	STRUCT_TYPE *stype=struct_lookup($2);
+	if(stype==NULL)
+	{
+		error("unknown struct type");
+		$$=NULL;
+	}
+	else
+	{
+		$$=declare_para($3, TYPE_STRUCT);
+		SYM *para=$$->a;
+		if(para!=NULL)
+		{
+			para->etc=stype;
+		}
+	}
 }
 ;
 
@@ -460,6 +516,11 @@ return_statement : RETURN expression
 	t->prev=$2->tac;
 	$$=t;
 }               
+| RETURN
+{
+	SYM *zero=mk_const(0);
+	$$=mk_tac(TAC_RETURN, zero, NULL, NULL);
+}
 ;
 
 if_statement : IF '(' expression ')' block

@@ -13,7 +13,7 @@ main()
 	output "\n";
 }
 
-int max(int x, int y)
+max(x,y)
 {
 	if(x>y)
 	{
