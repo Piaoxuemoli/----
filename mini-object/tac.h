@@ -65,6 +65,7 @@ typedef struct sym
 	void *etc;
 	int is_const;
 	int const_value;
+	int is_temp;
 	struct sym *next;
 } SYM;
 
@@ -173,6 +174,9 @@ extern FILE *file_x, *file_s;
 extern int yylineno, scope, next_tmp, next_label;
 extern SYM *sym_tab_global, *sym_tab_local;
 extern TAC *tac_first, *tac_last;
+extern int opt_enable_const_fold;
+extern int opt_enable_const_prop;
+extern int opt_enable_cse;
 
 /* function */
 void tac_init(void);

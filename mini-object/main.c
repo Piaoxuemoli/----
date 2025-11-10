@@ -33,7 +33,7 @@ void tac_list()
 int main(int argc,   char *argv[])
 {
 	if(argc != 2) error("usage: %s filename\n", argv[0]);
-	
+
 	char *input = argv[1];
 	if(input[strlen(input)-1]!='m') error("%s does not end with .m\n", input);
 

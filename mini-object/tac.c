@@ -14,6 +14,10 @@ STRUCT_TYPE *current_struct_decl=NULL;
 
 static STRUCT_TYPE *struct_types=NULL;
 
+int opt_enable_const_fold=1;
+int opt_enable_const_prop=1;
+int opt_enable_cse=1;
+
 typedef struct cse_entry
 {
 	int op;
@@ -30,12 +34,69 @@ static int cse_is_commutative(int op)
 	return op==TAC_ADD || op==TAC_MUL;
 }
 
+typedef struct sym_list
+{
+	SYM *sym;
+	struct sym_list *next;
+} SYM_LIST;
+
+static int sym_list_contains(SYM_LIST *list, SYM *sym)
+{
+	while(list!=NULL)
+	{
+		if(list->sym==sym)
+		{
+			return 1;
+		}
+		list=list->next;
+	}
+	return 0;
+}
+
+static SYM_LIST *sym_list_add(SYM_LIST *list, SYM *sym)
+{
+	if(sym==NULL) return list;
+	if(sym_list_contains(list, sym)) return list;
+	SYM_LIST *node=(SYM_LIST *)malloc(sizeof(SYM_LIST));
+	node->sym=sym;
+	node->next=list;
+	return node;
+}
+
+static SYM_LIST *sym_list_remove(SYM_LIST *list, SYM *sym)
+{
+	SYM_LIST **pp=&list;
+	while(*pp!=NULL)
+	{
+		if((*pp)->sym==sym)
+		{
+			SYM_LIST *victim=*pp;
+			*pp=victim->next;
+			free(victim);
+			break;
+		}
+		pp=&(*pp)->next;
+	}
+	return list;
+}
+
+static void sym_list_free(SYM_LIST *list)
+{
+	while(list!=NULL)
+	{
+		SYM_LIST *next=list->next;
+		free(list);
+		list=next;
+	}
+}
+
 static void const_invalidate_sym(SYM *sym);
 static void const_invalidate_all(void);
 static void const_record_assignment(SYM *var, EXP *exp);
 
 static SYM *cse_lookup(int op, SYM *lhs, SYM *rhs)
 {
+	if(!opt_enable_cse) return NULL;
 	if(lhs==NULL || rhs==NULL) return NULL;
 	for(CSE_ENTRY *iter=cse_entries; iter!=NULL; iter=iter->next)
 	{
@@ -54,6 +115,7 @@ static SYM *cse_lookup(int op, SYM *lhs, SYM *rhs)
 
 static void cse_insert(int op, SYM *lhs, SYM *rhs, SYM *result)
 {
+	if(!opt_enable_cse) return;
 	if(lhs==NULL || rhs==NULL || result==NULL) return;
 	CSE_ENTRY *entry=(CSE_ENTRY *)malloc(sizeof(CSE_ENTRY));
 	entry->op=op;
@@ -68,6 +130,7 @@ static void cse_kill_sym(SYM *sym)
 {
 	if(sym==NULL) return;
 	const_invalidate_sym(sym);
+	if(!opt_enable_cse) return;
 	CSE_ENTRY **pp=&cse_entries;
 	while(*pp!=NULL)
 	{
@@ -91,6 +154,248 @@ static void cse_clear(void)
 		CSE_ENTRY *node=cse_entries;
 		cse_entries=node->next;
 		free(node);
+	}
+}
+
+static int tac_has_assignment(TAC *inst)
+{
+	switch(inst->op)
+	{
+		case TAC_ADD:
+		case TAC_SUB:
+		case TAC_MUL:
+		case TAC_DIV:
+		case TAC_EQ:
+		case TAC_NE:
+		case TAC_LT:
+		case TAC_LE:
+		case TAC_GT:
+		case TAC_GE:
+		case TAC_NEG:
+		case TAC_COPY:
+		case TAC_ADDR:
+		case TAC_LOAD:
+		case TAC_CALL:
+		case TAC_VAR:
+		case TAC_INPUT:
+		return 1;
+		default:
+		return 0;
+	}
+}
+
+static int tac_is_hoist_candidate(TAC *inst)
+{
+	switch(inst->op)
+	{
+		case TAC_ADD:
+		case TAC_SUB:
+		case TAC_MUL:
+		case TAC_DIV:
+		case TAC_EQ:
+		case TAC_NE:
+		case TAC_LT:
+		case TAC_LE:
+		case TAC_GT:
+		case TAC_GE:
+		case TAC_NEG:
+		case TAC_COPY:
+		case TAC_ADDR:
+		return 1;
+		default:
+		return 0;
+	}
+}
+
+static int operand_invariant(SYM *sym, SYM_LIST *loop_defs, SYM_LIST *hoisted_defs)
+{
+	if(sym==NULL) return 1;
+	if(sym->type==SYM_INT || sym->type==SYM_TEXT) return 1;
+	if(sym_list_contains(hoisted_defs, sym)) return 1;
+	if(!sym_list_contains(loop_defs, sym)) return 1;
+	return 0;
+}
+
+static int symbol_defined_between(TAC *from, TAC *to, SYM *sym)
+{
+	for(TAC *iter=from; iter!=NULL && iter!=to; iter=iter->next)
+	{
+		if(iter->a==sym && tac_has_assignment(iter))
+		{
+			return 1;
+		}
+	}
+	return 0;
+}
+
+static TAC *find_label_tac(SYM *label)
+{
+	for(TAC *iter=tac_first; iter!=NULL; iter=iter->next)
+	{
+		if(iter->op==TAC_LABEL && iter->a==label)
+		{
+			return iter;
+		}
+	}
+	return NULL;
+}
+
+static void detach_tac(TAC *node)
+{
+	if(node==NULL) return;
+	if(node->prev!=NULL)
+	{
+		node->prev->next=node->next;
+	}
+	if(node->next!=NULL)
+	{
+		node->next->prev=node->prev;
+	}
+	node->prev=NULL;
+	node->next=NULL;
+}
+
+static void append_hoist_node(TAC **head, TAC **tail, TAC *node)
+{
+	if(node==NULL) return;
+	node->prev=NULL;
+	node->next=NULL;
+	if(*tail==NULL)
+	{
+		*head=node;
+		*tail=node;
+		return;
+	}
+	node->prev=*tail;
+	(*tail)->next=node;
+	*tail=node;
+}
+
+static int tac_uses_symbol(TAC *inst, SYM *sym)
+{
+	if(sym==NULL || inst==NULL)
+	{
+		return 0;
+	}
+	if(inst->b==sym || inst->c==sym)
+	{
+		return 1;
+	}
+	if(inst->a==sym && !tac_has_assignment(inst))
+	{
+		return 1;
+	}
+	return 0;
+}
+
+static int symbol_used_between(TAC *from, TAC *to, SYM *sym)
+{
+	for(TAC *iter=from; iter!=NULL && iter!=to; iter=iter->next)
+	{
+		if(iter->op==TAC_LABEL) continue;
+		if(tac_uses_symbol(iter, sym))
+		{
+			return 1;
+		}
+	}
+	return 0;
+}
+
+static void optimize_loop_licm(void)
+{
+	for(TAC *cur=tac_first; cur!=NULL; cur=cur->next)
+	{
+		if(cur->op!=TAC_GOTO) continue;
+		SYM *target=cur->a;
+		if(target==NULL) continue;
+		TAC *label=find_label_tac(target);
+		if(label==NULL) continue;
+		int is_loop=0;
+		for(TAC *scan=label; scan!=NULL; scan=scan->next)
+		{
+			if(scan==cur)
+			{
+				is_loop=1;
+				break;
+			}
+			if(scan->op==TAC_GOTO && scan->a==label->a && scan!=cur)
+			{
+				break;
+			}
+		}
+		if(!is_loop) continue;
+		TAC *body_start=label->next;
+		if(body_start==NULL || body_start==cur) continue;
+		SYM_LIST *loop_defs=NULL;
+		for(TAC *scan=body_start; scan!=cur; scan=scan->next)
+		{
+			if(scan->op==TAC_LABEL) continue;
+			if(scan->a!=NULL && tac_has_assignment(scan))
+			{
+				loop_defs=sym_list_add(loop_defs, scan->a);
+			}
+		}
+		SYM_LIST *hoisted_defs=NULL;
+		TAC *hoist_head=NULL;
+		TAC *hoist_tail=NULL;
+		for(TAC *scan=body_start; scan!=cur; )
+		{
+			TAC *next=scan->next;
+			if(!tac_is_hoist_candidate(scan) || scan->a==NULL)
+			{
+				scan=next;
+				continue;
+			}
+			if(!scan->a->is_temp && symbol_used_between(body_start, scan, scan->a))
+			{
+				scan=next;
+				continue;
+			}
+			if(symbol_defined_between(scan->next, cur, scan->a))
+			{
+				scan=next;
+				continue;
+			}
+			if(!operand_invariant(scan->b, loop_defs, hoisted_defs) || !operand_invariant(scan->c, loop_defs, hoisted_defs))
+			{
+				scan=next;
+				continue;
+			}
+			TAC *decl=NULL;
+			if(scan->prev!=NULL && scan->prev->op==TAC_VAR && scan->prev->a==scan->a)
+			{
+				decl=scan->prev;
+			}
+			if(decl!=NULL)
+			{
+				detach_tac(decl);
+				loop_defs=sym_list_remove(loop_defs, decl->a);
+			}
+			detach_tac(scan);
+			loop_defs=sym_list_remove(loop_defs, scan->a);
+			if(decl!=NULL) append_hoist_node(&hoist_head, &hoist_tail, decl);
+			append_hoist_node(&hoist_head, &hoist_tail, scan);
+			hoisted_defs=sym_list_add(hoisted_defs, scan->a);
+			scan=next;
+		}
+		if(hoist_head!=NULL)
+		{
+			TAC *before=label->prev;
+			if(before!=NULL)
+			{
+				before->next=hoist_head;
+				hoist_head->prev=before;
+			}
+			else
+			{
+				tac_first=hoist_head;
+				hoist_head->prev=NULL;
+			}
+			hoist_tail->next=label;
+			label->prev=hoist_tail;
+		}
+		sym_list_free(loop_defs);
+		sym_list_free(hoisted_defs);
 	}
 }
 
@@ -366,6 +671,11 @@ static void const_record_assignment(SYM *var, EXP *exp)
 	{
 		return;
 	}
+	if(!opt_enable_const_prop)
+	{
+		var->is_const=0;
+		return;
+	}
 	if(!(var->data_type==TYPE_INT || var->data_type==TYPE_CHAR))
 	{
 		var->is_const=0;
@@ -554,6 +864,7 @@ void tac_complete(void)
 	}
 
 	tac_first = cur;
+	optimize_loop_licm();
 }
 
 SYM *lookup_sym(SYM *symtab, char *name)
@@ -590,6 +901,7 @@ SYM *mk_sym(void)
 	t->etc=NULL;
 	t->is_const=0;
 	t->const_value=0;
+	t->is_temp=0;
 	t->next=NULL;
 	return t;
 }
@@ -787,7 +1099,12 @@ SYM *mk_tmp_type(int data_type)
 
 	name=malloc(12);
 	sprintf(name, "t%d", next_tmp++);
-	return mk_var(name, data_type);
+	sym=mk_var(name, data_type);
+	if(sym!=NULL)
+	{
+		sym->is_temp=1;
+	}
+	return sym;
 }
 
 SYM *mk_tmp(void)
@@ -840,7 +1157,7 @@ TAC *do_assign(SYM *var, EXP *exp)
 
 	if(var->type !=SYM_VAR) error("assignment to non-variable");
 	cse_kill_sym(var);
-	if(exp->tac==NULL && exp->ret!=NULL && exp->ret->type==SYM_VAR)
+	if(opt_enable_const_prop && exp->tac==NULL && exp->ret!=NULL && exp->ret->type==SYM_VAR)
 	{
 		SYM *src=exp->ret;
 		if(src->type==SYM_VAR && (src->data_type==TYPE_INT || src->data_type==TYPE_CHAR) && src->scope==0 && src->is_const)
@@ -1067,14 +1384,14 @@ EXP *do_array_element(SYM *array, EXP *index)
 	TAC *decl=mk_tac(TAC_VAR, scaled_tmp, NULL, NULL);
 	decl->prev=index->tac;
 	TAC *mul=NULL;
-	if(sym_is_numeric_const(index->ret) && index->tac==NULL)
+	if(opt_enable_const_fold && sym_is_numeric_const(index->ret) && index->tac==NULL)
 	{
 		int folded=stride_const * sym_const_value(index->ret);
 		TAC *assign=mk_tac(TAC_COPY, scaled_tmp, mk_const(folded), NULL);
 		assign->prev=decl;
 		mul=assign;
 	}
-	else if(stride_const==1)
+	else if(opt_enable_const_fold && stride_const==1)
 	{
 		TAC *assign=mk_tac(TAC_COPY, scaled_tmp, index->ret, NULL);
 		assign->prev=decl;
@@ -1160,14 +1477,14 @@ EXP *do_array_element_from_exp(EXP *base_ptr, EXP *index)
 	TAC *decl=mk_tac(TAC_VAR, scaled_tmp, NULL, NULL);
 	decl->prev=index->tac;
 	TAC *mul=NULL;
-	if(sym_is_numeric_const(index->ret) && index->tac==NULL)
+	if(opt_enable_const_fold && sym_is_numeric_const(index->ret) && index->tac==NULL)
 	{
 		int folded=stride_const * sym_const_value(index->ret);
 		TAC *assign=mk_tac(TAC_COPY, scaled_tmp, mk_const(folded), NULL);
 		assign->prev=decl;
 		mul=assign;
 	}
-	else if(stride_const==1)
+	else if(opt_enable_const_fold && stride_const==1)
 	{
 		TAC *assign=mk_tac(TAC_COPY, scaled_tmp, index->ret, NULL);
 		assign->prev=decl;
@@ -1342,77 +1659,80 @@ EXP *do_bin( int binop, EXP *exp1, EXP *exp2)
 	int lhs_const=exp_is_const_int(exp1, &lhs_val);
 	int rhs_const=exp_is_const_int(exp2, &rhs_val);
 
-	if(binop==TAC_ADD)
+	if(opt_enable_const_fold)
 	{
-		if(lhs_const && lhs_val==0)
+		if(binop==TAC_ADD)
 		{
-			free(exp1);
-			return exp2;
+			if(lhs_const && lhs_val==0)
+			{
+				free(exp1);
+				return exp2;
+			}
+			if(rhs_const && rhs_val==0)
+			{
+				free(exp2);
+				return exp1;
+			}
 		}
-		if(rhs_const && rhs_val==0)
+		else if(binop==TAC_SUB)
 		{
-			free(exp2);
-			return exp1;
+			if(rhs_const && rhs_val==0)
+			{
+				free(exp2);
+				return exp1;
+			}
+			if(lhs_const && lhs_val==0 && exp2->ret!=NULL)
+			{
+				free(exp1);
+				return do_un(TAC_NEG, exp2);
+			}
+			if(exp1->tac==NULL && exp2->tac==NULL && exp1->ret==exp2->ret)
+			{
+				free(exp2);
+				exp1->ret=mk_const(0);
+				exp1->tac=NULL;
+				return exp1;
+			}
 		}
-	}
-	else if(binop==TAC_SUB)
-	{
-		if(rhs_const && rhs_val==0)
+		else if(binop==TAC_MUL)
 		{
-			free(exp2);
-			return exp1;
+			if(lhs_const && lhs_val==0 && exp2->tac==NULL)
+			{
+				free(exp2);
+				return exp1;
+			}
+			if(rhs_const && rhs_val==0 && exp1->tac==NULL)
+			{
+				free(exp1);
+				return exp2;
+			}
+			if(lhs_const && lhs_val==1)
+			{
+				free(exp1);
+				return exp2;
+			}
+			if(rhs_const && rhs_val==1)
+			{
+				free(exp2);
+				return exp1;
+			}
 		}
-		if(lhs_const && lhs_val==0 && exp2->ret!=NULL)
+		else if(binop==TAC_DIV)
 		{
-			free(exp1);
-			return do_un(TAC_NEG, exp2);
-		}
-		if(exp1->tac==NULL && exp2->tac==NULL && exp1->ret==exp2->ret)
-		{
-			free(exp2);
-			exp1->ret=mk_const(0);
-			exp1->tac=NULL;
-			return exp1;
-		}
-	}
-	else if(binop==TAC_MUL)
-	{
-		if(lhs_const && lhs_val==0 && exp2->tac==NULL)
-		{
-			free(exp2);
-			return exp1;
-		}
-		if(rhs_const && rhs_val==0 && exp1->tac==NULL)
-		{
-			free(exp1);
-			return exp2;
-		}
-		if(lhs_const && lhs_val==1)
-		{
-			free(exp1);
-			return exp2;
-		}
-		if(rhs_const && rhs_val==1)
-		{
-			free(exp2);
-			return exp1;
-		}
-	}
-	else if(binop==TAC_DIV)
-	{
-		if(rhs_const && rhs_val==1)
-		{
-			free(exp2);
-			return exp1;
-		}
-		if(lhs_const && lhs_val==0 && exp2->tac==NULL)
-		{
-			free(exp2);
-			return exp1;
+			if(rhs_const && rhs_val==1)
+			{
+				free(exp2);
+				return exp1;
+			}
+			if(lhs_const && lhs_val==0 && exp2->tac==NULL)
+			{
+				free(exp2);
+				return exp1;
+			}
 		}
 	}
 
-	if(exp1->tac==NULL && exp2->tac==NULL)
+	if(opt_enable_cse && exp1->tac==NULL && exp2->tac==NULL)
 	{
 		SYM *cached=cse_lookup(binop, exp1->ret, exp2->ret);
 		if(cached!=NULL)
@@ -1424,7 +1744,7 @@ EXP *do_bin( int binop, EXP *exp1, EXP *exp2)
 		}
 	}
 
-	if(lhs_const && rhs_const)
+	if(opt_enable_const_fold && lhs_const && rhs_const)
 	{
 		long long v1=lhs_val;
 		long long v2=rhs_val;
@@ -1522,7 +1842,7 @@ EXP *do_cmp( int binop, EXP *exp1, EXP *exp2)
 	int lhs_const=exp_is_const_int(exp1, &lhs_val);
 	int rhs_const=exp_is_const_int(exp2, &rhs_val);
 
-	if(lhs_const && rhs_const)
+	if(opt_enable_const_fold && lhs_const && rhs_const)
 	{
 		int result=0;
 		switch(binop)
@@ -1554,7 +1874,7 @@ EXP *do_cmp( int binop, EXP *exp1, EXP *exp2)
 		return exp1;
 	}
 
-	if(exp1->tac==NULL && exp2->tac==NULL && exp1->ret==exp2->ret)
+	if(opt_enable_const_fold && exp1->tac==NULL && exp2->tac==NULL && exp1->ret==exp2->ret)
 	{
 		int result=0;
 		switch(binop)
@@ -1603,7 +1923,7 @@ EXP *do_un( int unop, EXP *exp)
 	if(unop==TAC_NEG)
 	{
 		long long val=0;
-		if(exp_is_const_int(exp, &val))
+		if(opt_enable_const_fold && exp_is_const_int(exp, &val))
 		{
 			exp->ret=mk_const((int)(-val));
 			exp->tac=NULL;
@@ -1880,7 +2200,7 @@ EXP *mk_var_exp(SYM *var)
 	{
 		return mk_exp(NULL, var, NULL);
 	}
-	if(var->scope==0 && (var->data_type==TYPE_INT || var->data_type==TYPE_CHAR) && var->is_const)
+	if(opt_enable_const_prop && var->scope==0 && (var->data_type==TYPE_INT || var->data_type==TYPE_CHAR) && var->is_const)
 	{
 		SYM *const_sym = (var->data_type==TYPE_CHAR) ? mk_char_const(var->const_value) : mk_const(var->const_value);
 		return mk_exp(NULL, const_sym, NULL);

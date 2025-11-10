@@ -13,6 +13,65 @@ int oof; /* offset of formal */
 int oon; /* offset of next frame */
 struct rdesc rdesc[R_NUM];
 
+static int sym_requires_writeback(SYM *sym)
+{
+	if(sym==NULL) return 0;
+	if(sym->type!=SYM_VAR) return 0;
+	return 1;
+}
+
+static TAC *find_label_tac_obj(SYM *label)
+{
+	for(TAC *iter=tac_first; iter!=NULL; iter=iter->next)
+	{
+		if(iter->op==TAC_LABEL && iter->a==label)
+		{
+			return iter;
+		}
+	}
+	return NULL;
+}
+
+static SYM *resolve_jump_target(SYM *label)
+{
+	SYM *current=label;
+	for(int depth=0; depth<16; ++depth)
+	{
+		if(current==NULL) break;
+		TAC *lt=find_label_tac_obj(current);
+		if(lt==NULL) break;
+		TAC *after=lt->next;
+		while(after!=NULL && after->op==TAC_LABEL && after->a==current)
+		{
+			after=after->next;
+		}
+		if(after!=NULL && after->op==TAC_GOTO && after->a!=current)
+		{
+			current=after->a;
+			continue;
+		}
+		break;
+	}
+	return current;
+}
+
+static int target_is_next_label(TAC *node, SYM *label)
+{
+	for(TAC *scan=node->next; scan!=NULL; scan=scan->next)
+	{
+		if(scan->op==TAC_LABEL)
+		{
+			if(scan->a==label)
+			{
+				return 1;
+			}
+			continue;
+		}
+		return 0;
+	}
+	return 0;
+}
+
 static int sym_size_bytes(SYM *sym)
 {
 	if(sym==NULL) return 4;
@@ -55,19 +114,24 @@ void rdesc_fill(int r, SYM *s, int mod)
 
 void asm_write_back(int r)
 {
-	if((rdesc[r].var!=NULL) && rdesc[r].mod)
+	if(rdesc[r].var==NULL || !rdesc[r].mod)
 	{
-		if(rdesc[r].var->scope==1) /* local var */
+		return;
+	}
+	SYM *sym=rdesc[r].var;
+	if(sym_requires_writeback(sym))
+	{
+		if(sym->scope==1) /* local var */
 		{
-			out_str(file_s, "	STO (R%u+%u),R%u\n", R_BP, rdesc[r].var->offset, r);
+			out_str(file_s, "	STO (R%u+%u),R%u\n", R_BP, sym->offset, r);
 		}
 		else /* global var */
 		{
 			out_str(file_s, "	LOD R%u,STATIC\n", R_TP);
-			out_str(file_s, "	STO (R%u+%u),R%u\n", R_TP, rdesc[r].var->offset, r);
+			out_str(file_s, "	STO (R%u+%u),R%u\n", R_TP, sym->offset, r);
 		}
-		rdesc[r].mod=UNMODIFIED;
 	}
+	rdesc[r].mod=UNMODIFIED;
 }
 
 void asm_load(int r, SYM *s) 
@@ -160,10 +224,67 @@ int reg_alloc(SYM *s)
 	return random;
 }
 
-void asm_bin(char *op, SYM *a, SYM *b, SYM *c)
+static const char *tac_bin_mnemonic(int op)
 {
-	int reg_b = reg_alloc(b);
-	int reg_c = reg_alloc(c);
+	switch(op)
+	{
+		case TAC_ADD:
+		return "ADD";
+		case TAC_SUB:
+		return "SUB";
+		case TAC_MUL:
+		return "MUL";
+		case TAC_DIV:
+		return "DIV";
+		default:
+		return "ADD";
+	}
+}
+
+static int tac_is_commutative_bin(int op)
+{
+	return op==TAC_ADD || op==TAC_MUL;
+}
+
+void asm_bin(int op, SYM *a, SYM *b, SYM *c)
+{
+	SYM *lhs=b;
+	SYM *rhs=c;
+	if(rhs!=NULL && rhs->type==SYM_INT)
+	{
+		/* ok */
+	}
+	else if(tac_is_commutative_bin(op) && lhs!=NULL && lhs->type==SYM_INT && rhs!=NULL)
+	{
+		SYM *tmp=lhs;
+		lhs=rhs;
+		rhs=tmp;
+	}
+
+	const char *mnemonic=tac_bin_mnemonic(op);
+	if(rhs!=NULL && rhs->type==SYM_INT && lhs!=NULL)
+	{
+		int reg_b = reg_alloc(lhs);
+		int imm=rhs->value;
+		if(op==TAC_SUB && mnemonic[0]=='S')
+		{
+			out_str(file_s, "\t%s R%u,%d\n", mnemonic, reg_b, imm);
+		}
+		else if(op==TAC_DIV && imm==0)
+		{
+			/* assembler/VM will catch divide by zero at runtime */
+			out_str(file_s, "\t%s R%u,%d\n", mnemonic, reg_b, imm);
+		}
+		else
+		{
+			out_str(file_s, "\t%s R%u,%d\n", mnemonic, reg_b, imm);
+		}
+		rdesc_fill(reg_b, a, MODIFIED);
+		return;
+	}
+
+	int reg_b = reg_alloc(lhs);
+	int reg_c = reg_alloc(rhs);
 	if(reg_b == reg_c)
 	{
 		int alt=-1;
@@ -172,8 +293,8 @@ void asm_bin(char *op, SYM *a, SYM *b, SYM *c)
 			if(r==reg_b) continue;
 			if(rdesc[r].var==NULL)
 			{
-				asm_load(r, c);
-				rdesc_fill(r, c, UNMODIFIED);
+				asm_load(r, rhs);
+				rdesc_fill(r, rhs, UNMODIFIED);
 				alt=r;
 				break;
 			}
@@ -184,8 +305,8 @@ void asm_bin(char *op, SYM *a, SYM *b, SYM *c)
 			{
 				if(r==reg_b) continue;
 				asm_write_back(r);
-				asm_load(r, c);
-				rdesc_fill(r, c, UNMODIFIED);
+				asm_load(r, rhs);
+				rdesc_fill(r, rhs, UNMODIFIED);
 				alt=r;
 				break;
 			}
@@ -195,27 +316,71 @@ void asm_bin(char *op, SYM *a, SYM *b, SYM *c)
 			alt=reg_b;
 		}
 		reg_c=alt;
+		if(rdesc[reg_b].var!=lhs)
+		{
+			asm_load(reg_b, lhs);
+			rdesc_fill(reg_b, lhs, UNMODIFIED);
+		}
 	}
 	
-	out_str(file_s, "\t%s R%u,R%u\n", op, reg_b, reg_c);
+	out_str(file_s, "	%s R%u,R%u\n", mnemonic, reg_b, reg_c);
 	rdesc_fill(reg_b, a, MODIFIED);
 }   
 
 void asm_cmp(int op, SYM *a, SYM *b, SYM *c)
 {
-	int reg_b=-1, reg_c=-1; 
-
-	while(reg_b == reg_c)
+	int reg_b = reg_alloc(b);
+	if(c!=NULL && c->type==SYM_INT)
 	{
-		reg_b = reg_alloc(b); 
-		reg_c = reg_alloc(c); 
+		out_str(file_s, "	SUB R%u,%d\n", reg_b, c->value);
 	}
-
-	out_str(file_s, "	SUB R%u,R%u\n", reg_b, reg_c);
+	else
+	{
+		int reg_c = reg_alloc(c);
+		if(reg_c == reg_b)
+		{
+			int alt=-1;
+			for(int r=R_GEN; r < R_NUM; r++)
+			{
+				if(r==reg_b) continue;
+				if(rdesc[r].var==NULL)
+				{
+					alt=r;
+					break;
+				}
+			}
+			if(alt==-1)
+			{
+				for(int r=R_GEN; r < R_NUM; r++)
+				{
+					if(r==reg_b) continue;
+					if(!sym_requires_writeback(rdesc[r].var) || !rdesc[r].mod)
+					{
+						alt=r;
+						break;
+					}
+				}
+			}
+			if(alt==-1)
+			{
+				alt = (reg_b==R_GEN) ? R_GEN+1 : R_GEN;
+				asm_write_back(alt);
+			}
+			asm_load(alt, c);
+			rdesc_fill(alt, c, UNMODIFIED);
+			reg_c=alt;
+			if(rdesc[reg_b].var!=b)
+			{
+				asm_load(reg_b, b);
+				rdesc_fill(reg_b, b, UNMODIFIED);
+			}
+		}
+		out_str(file_s, "	SUB R%u,R%u\n", reg_b, reg_c);
+	}
 	out_str(file_s, "	TST R%u\n", reg_b);
 
 	switch(op)
-	{		
+	{
 		case TAC_EQ:
 		out_str(file_s, "	LOD R3,R1+40\n");
 		out_str(file_s, "	JEZ R3\n");
@@ -224,7 +389,7 @@ void asm_cmp(int op, SYM *a, SYM *b, SYM *c)
 		out_str(file_s, "	JMP R3\n");
 		out_str(file_s, "	LOD R%u,1\n", reg_b);
 		break;
-		
+
 		case TAC_NE:
 		out_str(file_s, "	LOD R3,R1+40\n");
 		out_str(file_s, "	JEZ R3\n");
@@ -233,7 +398,7 @@ void asm_cmp(int op, SYM *a, SYM *b, SYM *c)
 		out_str(file_s, "	JMP R3\n");
 		out_str(file_s, "	LOD R%u,0\n", reg_b);
 		break;
-		
+
 		case TAC_LT:
 		out_str(file_s, "	LOD R3,R1+40\n");
 		out_str(file_s, "	JLZ R3\n");
@@ -242,7 +407,7 @@ void asm_cmp(int op, SYM *a, SYM *b, SYM *c)
 		out_str(file_s, "	JMP R3\n");
 		out_str(file_s, "	LOD R%u,1\n", reg_b);
 		break;
-		
+
 		case TAC_LE:
 		out_str(file_s, "	LOD R3,R1+40\n");
 		out_str(file_s, "	JGZ R3\n");
@@ -251,7 +416,7 @@ void asm_cmp(int op, SYM *a, SYM *b, SYM *c)
 		out_str(file_s, "	JMP R3\n");
 		out_str(file_s, "	LOD R%u,0\n", reg_b);
 		break;
-		
+
 		case TAC_GT:
 		out_str(file_s, "	LOD R3,R1+40\n");
 		out_str(file_s, "	JGZ R3\n");
@@ -260,7 +425,7 @@ void asm_cmp(int op, SYM *a, SYM *b, SYM *c)
 		out_str(file_s, "	JMP R3\n");
 		out_str(file_s, "	LOD R%u,1\n", reg_b);
 		break;
-		
+
 		case TAC_GE:
 		out_str(file_s, "	LOD R3,R1+40\n");
 		out_str(file_s, "	JLZ R3\n");
@@ -271,14 +436,28 @@ void asm_cmp(int op, SYM *a, SYM *b, SYM *c)
 		break;
 	}
 
-	/* Delete c from the descriptors and insert a */
 	rdesc_clear(reg_b);
 	rdesc_fill(reg_b, a, MODIFIED);
-}   
+}
 
 void asm_cond(char *op, SYM *a,  char *l)
 {
-	for(int r=R_GEN; r < R_NUM; r++) asm_write_back(r);
+	for(int r=R_GEN; r < R_NUM; r++)
+	{
+		if(rdesc[r].var==NULL)
+		{
+			continue;
+		}
+		if(sym_requires_writeback(rdesc[r].var))
+		{
+			asm_write_back(r);
+			rdesc_clear(r);
+		}
+		else
+		{
+			rdesc[r].mod=UNMODIFIED;
+		}
+	}
 
 	if(a !=NULL)
 	{
@@ -410,24 +589,72 @@ void asm_code(TAC *c)
 		return;
 
 		case TAC_ADD:
-		asm_bin("ADD", c->a, c->b, c->c);
+			asm_bin(TAC_ADD, c->a, c->b, c->c);
 		return;
 
 		case TAC_SUB:
-		asm_bin("SUB", c->a, c->b, c->c);
+			asm_bin(TAC_SUB, c->a, c->b, c->c);
 		return;
 
 		case TAC_MUL:
-		asm_bin("MUL", c->a, c->b, c->c);
+			asm_bin(TAC_MUL, c->a, c->b, c->c);
 		return;
 
 		case TAC_DIV:
-		asm_bin("DIV", c->a, c->b, c->c);
+			asm_bin(TAC_DIV, c->a, c->b, c->c);
 		return;
 
 		case TAC_NEG:
-		asm_bin("SUB", c->a, mk_const(0), c->b);
-		return;
+		{
+			SYM *zero_sym = mk_const(0);
+			int reg_zero = reg_alloc(zero_sym);
+			int reg_val = reg_alloc(c->b);
+			if(reg_zero == reg_val)
+			{
+				int alt=-1;
+				for(int r=R_GEN; r < R_NUM; r++)
+				{
+					if(r==reg_zero) continue;
+					if(rdesc[r].var==NULL)
+					{
+						alt=r;
+						break;
+					}
+				}
+				if(alt==-1)
+				{
+					for(int r=R_GEN; r < R_NUM; r++)
+					{
+						if(r==reg_zero) continue;
+						if(!sym_requires_writeback(rdesc[r].var) || !rdesc[r].mod)
+						{
+							alt=r;
+							break;
+						}
+					}
+				}
+				if(alt==-1)
+				{
+					alt = (reg_zero==R_GEN) ? R_GEN+1 : R_GEN;
+					asm_write_back(alt);
+				}
+				asm_load(alt, zero_sym);
+				rdesc_fill(alt, zero_sym, UNMODIFIED);
+				reg_zero=alt;
+			}
+			if(rdesc[reg_val].var!=c->b)
+			{
+				asm_load(reg_val, c->b);
+				rdesc_fill(reg_val, c->b, UNMODIFIED);
+			}
+			out_str(file_s, "	SUB R%u,R%u\n", reg_zero, reg_val);
+			rdesc_fill(reg_zero, c->a, MODIFIED);
+			if(sym_requires_writeback(rdesc[reg_val].var))
+			{
+				rdesc[reg_val].mod=UNMODIFIED;
+			}
+			return;
+		}
 
 		case TAC_EQ:
 		case TAC_NE:
@@ -479,12 +706,27 @@ void asm_code(TAC *c)
 		return;
 
 		case TAC_GOTO:
-		asm_cond("JMP", NULL, c->a->name);
-		return;
+		{
+			SYM *target=resolve_jump_target(c->a);
+			if(target==NULL) target=c->a;
+			if(!target_is_next_label(c, target))
+			{
+				asm_cond("JMP", NULL, target->name);
+			}
+			return;
+		}
 
 		case TAC_IFZ:
-		asm_cond("JEZ", c->b, c->a->name);
-		return;
+		{
+			SYM *target=resolve_jump_target(c->a);
+			if(target==NULL) target=c->a;
+			if(target!=NULL && target_is_next_label(c, target))
+			{
+				return;
+			}
+			asm_cond("JEZ", c->b, target->name);
+			return;
+		}
 
 		case TAC_LABEL:
 		for(int r=R_GEN; r < R_NUM; r++) asm_write_back(r);
@@ -593,8 +835,19 @@ void asm_code(TAC *c)
 			out_str(file_s, "\tSTO (R%u+0),R%u\n", rp, rv);
 			for(int r=R_GEN; r < R_NUM; r++)
 			{
-				asm_write_back(r);
-				rdesc_clear(r);
+				if(rdesc[r].var==NULL)
+				{
+					continue;
+				}
+				if(sym_requires_writeback(rdesc[r].var))
+				{
+					asm_write_back(r);
+					rdesc_clear(r);
+				}
+				else
+				{
+					rdesc[r].mod=UNMODIFIED;
+				}
 			}
 			return;
 		}
